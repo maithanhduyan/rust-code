@@ -1,0 +1,33 @@
+[package]
+name = "simbank-examples"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Example scenarios demonstrating Simbank DSL usage"
+
+[dependencies]
+simbank-core = { workspace = true }
+simbank-dsl = { workspace = true }
+simbank-reports = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+
+[[example]]
+name = "01_customer_onboarding"
+path = "01_customer_onboarding.rs"
+
+[[example]]
+name = "02_employee_operations"
+path = "02_employee_operations.rs"
+
+[[example]]
+name = "03_shareholder_dividends"
+path = "03_shareholder_dividends.rs"
+
+[[example]]
+name = "04_auditor_aml_scan"
+path = "04_auditor_aml_scan.rs"
+
+[[example]]
+name = "05_complex_scenario"
+path = "05_complex_scenario.rs"

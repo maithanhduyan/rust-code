@@ -6,6 +6,7 @@ members = [
     "crates/dsl",
     "crates/reports",
     "crates/cli",
+    "examples",
 ]
 resolver = "2"
 

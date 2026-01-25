@@ -41,7 +41,7 @@ pub use scenario::{
     Scenario, ScenarioBuilder, StakeholderBlock, Operation,
     CustomerOp, EmployeeOp, AuditorOp, ShareholderOp, ManagerOp,
 };
-pub use rules::{Rule, RuleCondition, RuleAction, RuleBuilder};
+pub use rules::{Rule, RuleCondition, RuleAction, RuleBuilder, RuleSet, TransactionContext};
 
 // Re-export core types for DSL users
 pub use simbank_core::{WalletType, PersonType, AmlFlag};

@@ -49,6 +49,28 @@ impl Scenario {
             }
         })
     }
+
+    /// Get all shareholder blocks
+    pub fn shareholders(&self) -> impl Iterator<Item = (&str, &Vec<ShareholderOp>)> {
+        self.blocks.iter().filter_map(|b| {
+            if let StakeholderBlock::Shareholder { name, operations } = b {
+                Some((name.as_str(), operations))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get all manager blocks
+    pub fn managers(&self) -> impl Iterator<Item = (&str, &Vec<ManagerOp>)> {
+        self.blocks.iter().filter_map(|b| {
+            if let StakeholderBlock::Manager { name, operations } = b {
+                Some((name.as_str(), operations))
+            } else {
+                None
+            }
+        })
+    }
 }
 
 /// Builder for constructing scenarios

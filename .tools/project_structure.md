@@ -1,5 +1,5 @@
 ---
-date: 2026-01-25 21:04:47 
+date: 2026-01-25 21:21:07 
 ---
 
 # Cấu trúc Dự án như sau:
@@ -65,7 +65,15 @@ date: 2026-01-25 21:04:47
 │           ├── exporters.rs
 │           └── lib.rs
 ├── examples
-│   └── .gitkeep
+│   ├── .gitkeep
+│   ├── 01_customer_onboarding.rs
+│   ├── 02_employee_operations.rs
+│   ├── 03_shareholder_dividends.rs
+│   ├── 04_auditor_aml_scan.rs
+│   ├── 05_complex_scenario.rs
+│   ├── Cargo.toml
+│   └── src
+│       └── lib.rs
 └── migrations
     └── 20260125_init.sql
 ```
@@ -4489,7 +4497,7 @@ pub use scenario::{
     Scenario, ScenarioBuilder, StakeholderBlock, Operation,
     CustomerOp, EmployeeOp, AuditorOp, ShareholderOp, ManagerOp,
 };
-pub use rules::{Rule, RuleCondition, RuleAction, RuleBuilder};
+pub use rules::{Rule, RuleCondition, RuleAction, RuleBuilder, RuleSet, TransactionContext};
 
 // Re-export core types for DSL users
 pub use simbank_core::{WalletType, PersonType, AmlFlag};
@@ -5442,6 +5450,28 @@ impl Scenario {
     pub fn auditors(&self) -> impl Iterator<Item = (&str, &Vec<AuditorOp>)> {
         self.blocks.iter().filter_map(|b| {
             if let StakeholderBlock::Auditor { name, operations } = b {
+                Some((name.as_str(), operations))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get all shareholder blocks
+    pub fn shareholders(&self) -> impl Iterator<Item = (&str, &Vec<ShareholderOp>)> {
+        self.blocks.iter().filter_map(|b| {
+            if let StakeholderBlock::Shareholder { name, operations } = b {
+                Some((name.as_str(), operations))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get all manager blocks
+    pub fn managers(&self) -> impl Iterator<Item = (&str, &Vec<ManagerOp>)> {
+        self.blocks.iter().filter_map(|b| {
+            if let StakeholderBlock::Manager { name, operations } = b {
                 Some((name.as_str(), operations))
             } else {
                 None
@@ -8481,6 +8511,1164 @@ pub use aml_report::{
     VelocityReport,
     VelocityAnalysis,
 };
+
+```
+
+## File ./simbank\examples\01_customer_onboarding.rs:
+```rust
+//! # Example 01: Customer Onboarding
+//!
+//! This example demonstrates a typical customer onboarding workflow:
+//! 1. Initial deposit to Funding wallet
+//! 2. Transfer funds between wallets (Funding → Spot)
+//! 3. Withdrawal from Funding wallet
+//!
+//! Run with: `cargo run -p simbank-examples --example 01_customer_onboarding`
+
+use rust_decimal_macros::dec;
+use simbank_dsl::{banking_scenario, rule, RuleSet, TransactionContext};
+
+fn main() {
+    println!("=== Example 01: Customer Onboarding ===\n");
+
+    // =========================================================================
+    // Part 1: Define the banking scenario using DSL
+    // =========================================================================
+
+    println!("📋 Defining scenario with banking_scenario! macro...\n");
+
+    let scenario = banking_scenario! {
+        // Alice - High-value customer opening account
+        Customer "Alice Premium" {
+            deposit 1000 USDT to Funding;
+            transfer 500 USDT from Funding to Spot;
+            withdraw 200 USDT from Funding;
+        }
+
+        // Bob - Regular customer with simpler workflow
+        Customer "Bob Regular" {
+            deposit 500 USD to Funding;
+            transfer 200 USD from Funding to Spot;
+        }
+    };
+
+    println!("Scenario created with {} stakeholder blocks", scenario.blocks.len());
+    println!();
+
+    // =========================================================================
+    // Part 2: Iterate and display operations
+    // =========================================================================
+
+    println!("👥 Customer Operations:\n");
+
+    for (name, ops) in scenario.customers() {
+        println!("  Customer: {}", name);
+        for op in ops {
+            match &op {
+                simbank_dsl::CustomerOp::Deposit { amount, currency, to_wallet } => {
+                    println!("    💰 Deposit {} {} to {:?}", amount, currency, to_wallet);
+                }
+                simbank_dsl::CustomerOp::Transfer { amount, currency, from_wallet, to_wallet } => {
+                    println!("    ↗️  Transfer {} {} from {:?} to {:?}",
+                             amount, currency, from_wallet, to_wallet);
+                }
+                simbank_dsl::CustomerOp::Withdraw { amount, currency, from_wallet } => {
+                    println!("    🏧 Withdraw {} {} from {:?}", amount, currency, from_wallet);
+                }
+            }
+        }
+        println!();
+    }
+
+    // =========================================================================
+    // Part 3: Define business rules using rule! macro
+    // =========================================================================
+
+    println!("⚖️  Business Rules:\n");
+
+    // AML Rule: Flag transactions over $10,000
+    let aml_rule = rule! {
+        name: "Large Deposit AML"
+        when amount > 10000 USD
+        then flag_aml "large_amount"
+    };
+
+    println!("  📌 Rule: {}", aml_rule.name);
+    println!("     Condition: {:?}", aml_rule.condition);
+    println!("     Action: {:?}", aml_rule.action);
+    println!();
+
+    // Daily limit rule
+    let limit_rule = rule! {
+        name: "Daily Withdrawal Limit"
+        when amount > 5000 USD
+        then require_approval
+    };
+
+    println!("  📌 Rule: {}", limit_rule.name);
+    println!("     Condition: {:?}", limit_rule.condition);
+    println!("     Action: {:?}", limit_rule.action);
+    println!();
+
+    // =========================================================================
+    // Part 4: Evaluate rules against sample transactions
+    // =========================================================================
+
+    println!("🔍 Rule Evaluation:\n");
+
+    // Create RuleSet
+    let ruleset = RuleSet::new()
+        .add(aml_rule)
+        .add(limit_rule);
+
+    // Sample transactions to evaluate
+    let test_transactions = vec![
+        ("Small deposit", dec!(500), "USD", "deposit"),
+        ("Large deposit", dec!(15000), "USD", "deposit"),
+        ("Normal withdrawal", dec!(1000), "USD", "withdrawal"),
+        ("Large withdrawal", dec!(7500), "USD", "withdrawal"),
+    ];
+
+    for (desc, amount, currency, tx_type) in test_transactions {
+        let ctx = TransactionContext::new()
+            .with_amount(amount, currency)
+            .with_tx_type(tx_type)
+            .with_location("US");
+
+        let actions = ruleset.evaluate(&ctx);
+        let status = if actions.is_empty() {
+            "✅ Approved"
+        } else {
+            "⚠️  Review Required"
+        };
+
+        println!("  {} - {} {} {}: {} ({} rules matched)",
+                 desc, amount, currency, tx_type, status, actions.len());
+    }
+    println!();
+
+    println!("✅ Customer onboarding example completed!");
+}
+
+```
+
+## File ./simbank\examples\02_employee_operations.rs:
+```rust
+//! # Example 02: Employee Operations
+//!
+//! This example demonstrates employee payroll operations:
+//! 1. Receiving salary payments
+//! 2. Buying insurance plans
+//!
+//! Run with: `cargo run -p simbank-examples --example 02_employee_operations`
+
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use simbank_dsl::{banking_scenario, rule, RuleSet, TransactionContext};
+
+fn main() {
+    println!("=== Example 02: Employee Operations ===\n");
+
+    // =========================================================================
+    // Part 1: Define employee scenario
+    // =========================================================================
+
+    println!("📋 Defining employee payroll scenario...\n");
+
+    let scenario = banking_scenario! {
+        // Senior Engineer - Full benefits
+        Employee "Bob Engineer" {
+            receive_salary 8000 USD;
+            buy_insurance "Gold Plan" for 500 USD;
+        }
+
+        // Junior Analyst
+        Employee "Carol Analyst" {
+            receive_salary 5000 USD;
+            buy_insurance "Silver Plan" for 300 USD;
+        }
+
+        // Intern with basic salary
+        Employee "David Intern" {
+            receive_salary 2500 USD;
+            buy_insurance "Basic Plan" for 100 USD;
+        }
+    };
+
+    println!("Scenario created with {} employee blocks", scenario.blocks.len());
+    println!();
+
+    // =========================================================================
+    // Part 2: Display and calculate payroll
+    // =========================================================================
+
+    println!("👔 Employee Payroll Summary:\n");
+
+    let mut total_salary = dec!(0);
+    let mut total_insurance = dec!(0);
+    let mut employee_count = 0;
+
+    for (name, ops) in scenario.employees() {
+        println!("  Employee: {}", name);
+        let mut emp_salary = dec!(0);
+        let mut emp_insurance = dec!(0);
+
+        for op in ops {
+            match &op {
+                simbank_dsl::EmployeeOp::ReceiveSalary { amount, currency } => {
+                    emp_salary = *amount;
+                    total_salary += amount;
+                    println!("    💵 Salary: {} {}", amount, currency);
+                }
+                simbank_dsl::EmployeeOp::BuyInsurance { plan, cost, currency } => {
+                    emp_insurance = *cost;
+                    total_insurance += cost;
+                    println!("    🏥 Insurance ({}): {} {}", plan, cost, currency);
+                }
+            }
+        }
+
+        let net = emp_salary - emp_insurance;
+        println!("    ────────────────────────────");
+        println!("    Net Take-Home: {} USD", net);
+        println!();
+
+        employee_count += 1;
+    }
+
+    println!("  📊 Payroll Summary:");
+    println!("     Employees:        {}", employee_count);
+    println!("     Total Salary:     {} USD", total_salary);
+    println!("     Total Insurance:  {} USD", total_insurance);
+    println!("     Employer Cost:    {} USD", total_salary);
+    println!();
+
+    // =========================================================================
+    // Part 3: Define payroll rules
+    // =========================================================================
+
+    println!("⚖️  Payroll Rules:\n");
+
+    let salary_rule = rule! {
+        name: "Salary Payment Approval"
+        when amount > 5000 USD
+        then require_approval
+    };
+
+    let bonus_rule = rule! {
+        name: "Large Bonus AML"
+        when amount > 10000 USD
+        then flag_aml "large_bonus"
+    };
+
+    let insurance_rule = rule! {
+        name: "Insurance Limit Check"
+        when amount > 1000 USD
+        then require_approval
+    };
+
+    println!("  📌 {}: {:?}", salary_rule.name, salary_rule.condition);
+    println!("  📌 {}: {:?}", bonus_rule.name, bonus_rule.condition);
+    println!("  📌 {}: {:?}", insurance_rule.name, insurance_rule.condition);
+    println!();
+
+    // =========================================================================
+    // Part 4: Validate payroll transactions
+    // =========================================================================
+
+    println!("🔍 Payroll Validation:\n");
+
+    let ruleset = RuleSet::new()
+        .add(salary_rule)
+        .add(bonus_rule)
+        .add(insurance_rule);
+
+    let test_payments = vec![
+        ("Bob salary", dec!(8000), "salary"),
+        ("Carol salary", dec!(5000), "salary"),
+        ("David salary", dec!(2500), "salary"),
+        ("Year-end bonus", dec!(15000), "bonus"),
+    ];
+
+    for (desc, amount, tx_type) in test_payments {
+        let ctx = TransactionContext::new()
+            .with_amount(amount, "USD")
+            .with_tx_type(tx_type)
+            .with_location("US");
+
+        let actions = ruleset.evaluate(&ctx);
+        let status = if actions.is_empty() {
+            "✅ Auto-approved"
+        } else {
+            "⚠️  Needs Review"
+        };
+
+        println!("  {} (${}) : {} ({} rules)", desc, amount, status, actions.len());
+    }
+    println!();
+
+    // =========================================================================
+    // Part 5: Annual compensation report
+    // =========================================================================
+
+    println!("📈 Annual Compensation Report:\n");
+
+    let monthly_salary = total_salary;
+    let annual_salary = monthly_salary * Decimal::from(12);
+    let annual_insurance = total_insurance * Decimal::from(12);
+
+    println!("  Monthly Payroll:      ${:>12}", monthly_salary);
+    println!("  Annual Payroll:       ${:>12}", annual_salary);
+    println!("  Annual Insurance:     ${:>12}", annual_insurance);
+    println!("  Total Annual Cost:    ${:>12}", annual_salary + annual_insurance);
+    println!();
+
+    println!("✅ Employee operations example completed!");
+}
+
+```
+
+## File ./simbank\examples\03_shareholder_dividends.rs:
+```rust
+//! # Example 03: Shareholder Dividends
+//!
+//! This example demonstrates dividend distribution:
+//! 1. Quarterly dividend payments to shareholders
+//! 2. Tax withholding calculations
+//! 3. AML compliance for large payments
+//!
+//! Run with: `cargo run -p simbank-examples --example 03_shareholder_dividends`
+
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use simbank_dsl::{banking_scenario, rule, RuleSet, TransactionContext};
+
+fn main() {
+    println!("=== Example 03: Shareholder Dividends ===\n");
+
+    // =========================================================================
+    // Part 1: Define dividend distribution scenario
+    // =========================================================================
+
+    println!("📋 Defining Q4 2025 dividend distribution...\n");
+
+    let scenario = banking_scenario! {
+        // Founding shareholder - 25% ownership
+        Shareholder "George Founder" {
+            receive_dividend 50000 USD;
+        }
+
+        // Institutional investor - 50% ownership
+        Shareholder "Ivy Investments LLC" {
+            receive_dividend 100000 USD;
+        }
+
+        // Angel investor - 15% ownership
+        Shareholder "Henry Angel" {
+            receive_dividend 30000 USD;
+        }
+
+        // Early employee shareholder - 10% ownership
+        Shareholder "Diana Early" {
+            receive_dividend 20000 USD;
+        }
+    };
+
+    println!("Scenario created with {} shareholder blocks", scenario.blocks.len());
+    println!();
+
+    // =========================================================================
+    // Part 2: Calculate dividend distribution with taxes
+    // =========================================================================
+
+    println!("💰 Dividend Distribution (Q4 2025):\n");
+
+    let withholding_rate = dec!(0.15); // 15% tax withholding
+    let mut total_gross = dec!(0);
+    let mut total_tax = dec!(0);
+    let mut total_net = dec!(0);
+
+    // Ownership percentages
+    let ownership = vec![
+        ("George Founder", dec!(25)),
+        ("Ivy Investments LLC", dec!(50)),
+        ("Henry Angel", dec!(15)),
+        ("Diana Early", dec!(10)),
+    ];
+    let mut ownership_idx = 0;
+
+    for (name, ops) in scenario.shareholders() {
+        println!("  🏦 Shareholder: {}", name);
+
+        for op in ops {
+            if let simbank_dsl::ShareholderOp::ReceiveDividend { amount, currency } = op {
+                let tax = amount * withholding_rate;
+                let net = amount - tax;
+
+                total_gross += amount;
+                total_tax += tax;
+                total_net += net;
+
+                let (_, ownership_pct) = ownership[ownership_idx];
+                ownership_idx += 1;
+
+                println!("     Ownership:   {}%", ownership_pct);
+                println!("     Gross:       {} {}", amount, currency);
+                println!("     Tax (15%):   {} {}", tax.round_dp(2), currency);
+                println!("     Net:         {} {}", net.round_dp(2), currency);
+            }
+        }
+        println!();
+    }
+
+    println!("  📊 Distribution Summary:");
+    println!("     Total Gross:      ${:>12}", total_gross);
+    println!("     Total Tax:        ${:>12}", total_tax.round_dp(2));
+    println!("     Total Net:        ${:>12}", total_net.round_dp(2));
+    println!();
+
+    // =========================================================================
+    // Part 3: Define dividend compliance rules
+    // =========================================================================
+
+    println!("⚖️  Dividend Compliance Rules:\n");
+
+    let large_dividend_rule = rule! {
+        name: "Large Dividend Reporting"
+        when amount > 50000 USD
+        then flag_aml "large_amount"
+    };
+
+    let foreign_investor_rule = rule! {
+        name: "Foreign Investor Withholding"
+        when amount > 10000 USD
+        then require_approval
+    };
+
+    let quarterly_cap_rule = rule! {
+        name: "Quarterly Dividend Cap"
+        when amount > 200000 USD
+        then block
+    };
+
+    println!("  📌 {}", large_dividend_rule.name);
+    println!("     Condition: {:?}", large_dividend_rule.condition);
+    println!("     Action: {:?}", large_dividend_rule.action);
+    println!();
+
+    println!("  📌 {}", foreign_investor_rule.name);
+    println!("     Condition: {:?}", foreign_investor_rule.condition);
+    println!("     Action: {:?}", foreign_investor_rule.action);
+    println!();
+
+    println!("  📌 {}", quarterly_cap_rule.name);
+    println!("     Condition: {:?}", quarterly_cap_rule.condition);
+    println!("     Action: {:?}", quarterly_cap_rule.action);
+    println!();
+
+    // =========================================================================
+    // Part 4: Evaluate dividends against rules
+    // =========================================================================
+
+    println!("🔍 Compliance Check:\n");
+
+    let ruleset = RuleSet::new()
+        .add(large_dividend_rule)
+        .add(foreign_investor_rule)
+        .add(quarterly_cap_rule);
+
+    let dividends = vec![
+        ("George Founder", dec!(50000)),
+        ("Ivy Investments LLC", dec!(100000)),
+        ("Henry Angel", dec!(30000)),
+        ("Diana Early", dec!(20000)),
+    ];
+
+    println!("  {:<25} {:>12} {:<20}", "SHAREHOLDER", "AMOUNT", "STATUS");
+    println!("  {}", "─".repeat(60));
+
+    for (name, amount) in dividends {
+        let ctx = TransactionContext::new()
+            .with_amount(amount, "USD")
+            .with_tx_type("dividend")
+            .with_location("US");
+
+        let actions = ruleset.evaluate(&ctx);
+        let status = if actions.is_empty() {
+            "✅ Approved".to_string()
+        } else if ruleset.is_blocked(&ctx) {
+            "🚫 Blocked".to_string()
+        } else {
+            format!("⚠️  Review ({})", actions.len())
+        };
+
+        println!("  {:<25} ${:>11} {}", name, amount, status);
+    }
+    println!();
+
+    // =========================================================================
+    // Part 5: Tax reporting summary
+    // =========================================================================
+
+    println!("📄 Tax Reporting (1099-DIV):\n");
+
+    println!("  Form 1099-DIV Summary for Tax Year 2025");
+    println!("  ────────────────────────────────────────");
+    println!("  Total Ordinary Dividends (1a):  ${}", total_gross);
+    println!("  Total Qualified Dividends (1b): ${}", total_gross);
+    println!("  Federal Tax Withheld (4):       ${}", total_tax.round_dp(2));
+    println!();
+
+    // Projected annual dividends
+    let annual_projection = total_gross * Decimal::from(4);
+    println!("  📈 Annual Projection (4 quarters):");
+    println!("     Gross Dividends:    ${}", annual_projection);
+    println!("     Total Withholding:  ${}", (total_tax * Decimal::from(4)).round_dp(2));
+    println!();
+
+    println!("✅ Shareholder dividends example completed!");
+}
+
+```
+
+## File ./simbank\examples\04_auditor_aml_scan.rs:
+```rust
+//! # Example 04: Auditor AML Scan
+//!
+//! This example demonstrates AML (Anti-Money Laundering) auditing:
+//! 1. Auditor scans transactions for suspicious patterns
+//! 2. Generates compliance reports
+//! 3. Flags high-risk transactions
+//!
+//! Run with: `cargo run -p simbank-examples --example 04_auditor_aml_scan`
+
+use rust_decimal_macros::dec;
+use simbank_dsl::{banking_scenario, rule, RuleSet, TransactionContext};
+
+fn main() {
+    println!("=== Example 04: Auditor AML Scan ===\n");
+
+    // =========================================================================
+    // Part 1: Define auditor scenario
+    // =========================================================================
+
+    println!("📋 Defining AML audit scenario...\n");
+
+    let scenario = banking_scenario! {
+        // External auditor conducting quarterly review
+        Auditor "Deloitte External" {
+            scan from "2025-10-01" to "2025-12-31" flags ["large_amount", "near_threshold"];
+            report Markdown;
+        }
+
+        // Internal compliance officer
+        Auditor "Internal Compliance" {
+            scan from "2025-01-01" flags ["high_risk_country"];
+            report Json;
+        }
+    };
+
+    println!("Scenario created with {} auditor blocks", scenario.blocks.len());
+    println!();
+
+    // Display auditor operations
+    println!("🔍 Auditor Operations:\n");
+    for (name, ops) in scenario.auditors() {
+        println!("  Auditor: {}", name);
+        for op in ops {
+            match &op {
+                simbank_dsl::AuditorOp::Scan { from_date, to_date, flags } => {
+                    let date_range = match (from_date, to_date) {
+                        (Some(from), Some(to)) => format!("{} to {}", from, to),
+                        (Some(from), None) => format!("{} onwards", from),
+                        _ => "All time".to_string(),
+                    };
+                    println!("    📅 Scan Period: {}", date_range);
+                    println!("    🏷️  Filter Flags: {:?}", flags);
+                }
+                simbank_dsl::AuditorOp::Report { format } => {
+                    println!("    📄 Report Format: {}", format);
+                }
+            }
+        }
+        println!();
+    }
+
+    // =========================================================================
+    // Part 2: Define AML rules
+    // =========================================================================
+
+    println!("⚖️  AML Detection Rules:\n");
+
+    let large_tx_rule = rule! {
+        name: "Large Cash Transaction"
+        when amount > 10000 USD
+        then flag_aml "large_amount"
+    };
+
+    let near_threshold_rule = rule! {
+        name: "Structuring Detection"
+        when amount >= 9000 USD
+        then flag_aml "near_threshold"
+    };
+
+    let high_risk_rule = rule! {
+        name: "High Risk Country"
+        when location in ["IR", "KP", "SY", "CU"]
+        then flag_aml "high_risk_country"
+    };
+
+    let approval_rule = rule! {
+        name: "New Account Large Transaction"
+        when amount > 5000 USD
+        then require_approval
+    };
+
+    println!("  📌 {}: {:?}", large_tx_rule.name, large_tx_rule.condition);
+    println!("  📌 {}: {:?}", near_threshold_rule.name, near_threshold_rule.condition);
+    println!("  📌 {}: {:?}", high_risk_rule.name, high_risk_rule.condition);
+    println!("  📌 {}: {:?}", approval_rule.name, approval_rule.condition);
+    println!();
+
+    // Create RuleSet
+    let ruleset = RuleSet::new()
+        .add(large_tx_rule)
+        .add(near_threshold_rule)
+        .add(high_risk_rule)
+        .add(approval_rule);
+
+    // =========================================================================
+    // Part 3: Simulate transaction scanning
+    // =========================================================================
+
+    println!("📊 Transaction Scan Results:\n");
+
+    // Simulated transactions to scan
+    let transactions = vec![
+        ("TXN_001", "Alice", dec!(500), "USD", "deposit", "US"),
+        ("TXN_002", "Bob", dec!(9500), "USD", "deposit", "US"),       // Near threshold!
+        ("TXN_003", "Carol", dec!(15000), "USD", "withdrawal", "US"), // Large amount!
+        ("TXN_004", "David", dec!(2000), "USD", "transfer", "IR"),    // High risk country!
+        ("TXN_005", "Eve", dec!(8000), "USD", "deposit", "US"),       // Needs approval
+        ("TXN_006", "Frank", dec!(100), "USD", "deposit", "RU"),      // Normal
+        ("TXN_007", "Grace", dec!(50000), "USD", "withdrawal", "KP"), // Multiple flags!
+    ];
+
+    println!("  {:<10} {:<10} {:>12} {:<6} {:<12} {:<6} {}",
+             "TX ID", "CUSTOMER", "AMOUNT", "CUR", "TYPE", "LOC", "FLAGS");
+    println!("  {}", "─".repeat(75));
+
+    let mut flagged_count = 0;
+
+    for (tx_id, customer, amount, currency, tx_type, location) in &transactions {
+        let ctx = TransactionContext::new()
+            .with_amount(*amount, currency)
+            .with_tx_type(tx_type)
+            .with_location(location);
+
+        let actions = ruleset.evaluate(&ctx);
+        let flag_str = if actions.is_empty() {
+            "✅".to_string()
+        } else {
+            flagged_count += 1;
+            format!("⚠️  {} rules", actions.len())
+        };
+
+        println!("  {:<10} {:<10} {:>12} {:<6} {:<12} {:<6} {}",
+                 tx_id, customer, amount, currency, tx_type, location, flag_str);
+    }
+
+    println!("  {}", "─".repeat(75));
+    println!("  Total: {} transactions, {} flagged ({:.1}%)",
+             transactions.len(),
+             flagged_count,
+             (flagged_count as f64 / transactions.len() as f64) * 100.0);
+    println!();
+
+    // =========================================================================
+    // Part 4: Risk assessment summary
+    // =========================================================================
+
+    println!("🎯 Risk Assessment Summary:\n");
+
+    // Calculate risk metrics
+    let large_amount_count = transactions.iter()
+        .filter(|(_, _, amount, _, _, _)| *amount > dec!(10000))
+        .count();
+    let near_threshold_count = transactions.iter()
+        .filter(|(_, _, amount, _, _, _)| *amount >= dec!(9000) && *amount <= dec!(10000))
+        .count();
+    let high_risk_country_count = transactions.iter()
+        .filter(|(_, _, _, _, _, loc)| ["IR", "KP", "SY", "CU"].contains(loc))
+        .count();
+
+    let risk_score = (large_amount_count * 30 + near_threshold_count * 20 + high_risk_country_count * 50) as f64
+        / transactions.len() as f64;
+
+    let risk_level = if risk_score < 20.0 {
+        ("🟢", "Low")
+    } else if risk_score < 40.0 {
+        ("🟡", "Medium")
+    } else if risk_score < 60.0 {
+        ("🟠", "High")
+    } else {
+        ("🔴", "Critical")
+    };
+
+    println!("  Overall Risk Level: {} {}", risk_level.0, risk_level.1);
+    println!("  Risk Score: {:.1}/100", risk_score);
+    println!();
+
+    println!("  Flag Breakdown:");
+    println!("    🔸 Large Amount (>$10K):      {}", large_amount_count);
+    println!("    🔸 Near Threshold ($9K-$10K): {}", near_threshold_count);
+    println!("    🔸 High Risk Country:         {}", high_risk_country_count);
+    println!();
+
+    println!("  Recommendations:");
+    if high_risk_country_count > 0 {
+        println!("    ⚠️  Review {} transactions from high-risk jurisdictions",
+                 high_risk_country_count);
+    }
+    if large_amount_count > 0 {
+        println!("    ⚠️  File CTRs for {} large cash transactions",
+                 large_amount_count);
+    }
+    if near_threshold_count > 0 {
+        println!("    ⚠️  Investigate {} potential structuring attempts",
+                 near_threshold_count);
+    }
+    println!();
+
+    println!("✅ AML audit example completed!");
+}
+
+```
+
+## File ./simbank\examples\05_complex_scenario.rs:
+```rust
+//! # Example 05: Complex Multi-Stakeholder Scenario
+//!
+//! This example demonstrates a complete business scenario with all stakeholders:
+//! 1. Customers performing daily banking
+//! 2. Employees receiving payroll
+//! 3. Shareholders receiving dividends
+//! 4. Managers approving operations
+//! 5. Auditors performing compliance checks
+//!
+//! Run with: `cargo run -p simbank-examples --example 05_complex_scenario`
+
+use rust_decimal_macros::dec;
+use simbank_dsl::{banking_scenario, rule, RuleSet, TransactionContext};
+
+fn main() {
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║      Example 05: Complex Multi-Stakeholder Banking Scenario      ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝\n");
+
+    // =========================================================================
+    // Complete Scenario: Q4 2025 Corporate Operations
+    // =========================================================================
+
+    let scenario = banking_scenario! {
+        // -------------------------------------
+        // Customer Operations
+        // -------------------------------------
+
+        // High-value customer - Private Banking
+        Customer "Alice Premium" {
+            deposit 50000 USD to Funding;
+            transfer 30000 USD from Funding to Spot;
+            withdraw 5000 USD from Funding;
+        }
+
+        // Regular customer - Retail Banking
+        Customer "Bob Regular" {
+            deposit 2000 USD to Funding;
+            transfer 500 USD from Funding to Spot;
+            withdraw 200 USD from Funding;
+        }
+
+        // International customer
+        Customer "Carlos International" {
+            deposit 10000 EUR to Funding;
+            transfer 8000 EUR from Funding to Spot;
+        }
+
+        // -------------------------------------
+        // Employee Payroll
+        // -------------------------------------
+
+        // Senior Engineer
+        Employee "Diana Dev" {
+            receive_salary 12000 USD;
+            buy_insurance "Premium Health" for 400 USD;
+        }
+
+        // Junior Analyst
+        Employee "Eric Analyst" {
+            receive_salary 5500 USD;
+            buy_insurance "Basic Health" for 150 USD;
+        }
+
+        // Contractor
+        Employee "Fiona Contractor" {
+            receive_salary 8000 USD;
+        }
+
+        // -------------------------------------
+        // Shareholder Dividends
+        // -------------------------------------
+
+        // Founding shareholders
+        Shareholder "George Founder" {
+            receive_dividend 25000 USD;
+        }
+
+        Shareholder "Helen Cofounder" {
+            receive_dividend 20000 USD;
+        }
+
+        // Institutional investor
+        Shareholder "Ivy Investments LLC" {
+            receive_dividend 50000 USD;
+        }
+
+        // -------------------------------------
+        // Manager Approvals
+        // -------------------------------------
+
+        Manager "James CEO" {
+            pay_salary to "Diana Dev" amount 12000 USD;
+            pay_bonus to "Diana Dev" amount 6000 USD reason "Year-end bonus";
+        }
+
+        Manager "Karen CFO" {
+            pay_dividend to "George Founder" amount 25000 USD;
+            pay_dividend to "Helen Cofounder" amount 20000 USD;
+            pay_dividend to "Ivy Investments LLC" amount 50000 USD;
+        }
+
+        // -------------------------------------
+        // Auditor Compliance
+        // -------------------------------------
+
+        Auditor "Compliance Team" {
+            scan from "2025-10-01" to "2025-12-31" flags ["large_amount", "near_threshold"];
+            report Markdown;
+        }
+
+        Auditor "External Audit" {
+            scan from "2025-01-01" flags ["high_risk_country"];
+            report Json;
+        }
+    };
+
+    println!("📋 Scenario created with {} stakeholder blocks\n", scenario.blocks.len());
+
+    // =========================================================================
+    // Part 1: Customer Operations Summary
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                    CUSTOMER OPERATIONS                       │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    let mut total_deposits = dec!(0);
+    let mut total_transfers = dec!(0);
+    let mut total_withdrawals = dec!(0);
+
+    for (name, ops) in scenario.customers() {
+        println!("  👤 Customer: {}", name);
+        for op in ops {
+            match &op {
+                simbank_dsl::CustomerOp::Deposit { amount, currency, .. } => {
+                    total_deposits += amount;
+                    println!("      💰 Deposit {} {}", amount, currency);
+                }
+                simbank_dsl::CustomerOp::Transfer { amount, currency, from_wallet, to_wallet } => {
+                    total_transfers += amount;
+                    println!("      ↗️  Transfer {} {} {:?} → {:?}", amount, currency, from_wallet, to_wallet);
+                }
+                simbank_dsl::CustomerOp::Withdraw { amount, currency, .. } => {
+                    total_withdrawals += amount;
+                    println!("      🏧 Withdraw {} {}", amount, currency);
+                }
+            }
+        }
+        println!();
+    }
+
+    println!("  📊 Customer Summary:");
+    println!("     Total Deposits:    ${:>12}", total_deposits);
+    println!("     Total Transfers:   ${:>12}", total_transfers);
+    println!("     Total Withdrawals: ${:>12}", total_withdrawals);
+    println!("     Net Change:        ${:>12}", total_deposits - total_withdrawals);
+    println!();
+
+    // =========================================================================
+    // Part 2: Payroll Summary
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                    PAYROLL OPERATIONS                        │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    let mut total_salary = dec!(0);
+    let mut total_insurance = dec!(0);
+
+    for (name, ops) in scenario.employees() {
+        println!("  👔 Employee: {}", name);
+        let mut emp_total = dec!(0);
+        for op in ops {
+            match &op {
+                simbank_dsl::EmployeeOp::ReceiveSalary { amount, currency } => {
+                    total_salary += amount;
+                    emp_total += amount;
+                    println!("      💵 Salary: {} {}", amount, currency);
+                }
+                simbank_dsl::EmployeeOp::BuyInsurance { plan, cost, currency } => {
+                    total_insurance += cost;
+                    println!("      🏥 Insurance ({}): {} {}", plan, cost, currency);
+                }
+            }
+        }
+        println!("      ────────────────────────");
+        println!("      Total Compensation: ${}", emp_total);
+        println!();
+    }
+
+    println!("  📊 Payroll Summary:");
+    println!("     Total Salaries:   ${:>12}", total_salary);
+    println!("     Total Insurance:  ${:>12}", total_insurance);
+    println!("     Gross Payroll:    ${:>12}", total_salary);
+    println!();
+
+    // =========================================================================
+    // Part 3: Dividend Distribution
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                  DIVIDEND DISTRIBUTION                       │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    let mut total_dividends = dec!(0);
+    let withholding_rate = dec!(0.15); // 15% tax withholding
+
+    for (name, ops) in scenario.shareholders() {
+        println!("  🏦 Shareholder: {}", name);
+        for op in ops {
+            if let simbank_dsl::ShareholderOp::ReceiveDividend { amount, currency } = &op {
+                total_dividends += amount;
+                let tax = amount * withholding_rate;
+                let net = amount - tax;
+                println!("      💵 Gross:  {} {}", amount, currency);
+                println!("      🏛️  Tax:    {} {} (15%)", tax.round_dp(2), currency);
+                println!("      💰 Net:    {} {}", net.round_dp(2), currency);
+            }
+        }
+        println!();
+    }
+
+    println!("  📊 Dividend Summary:");
+    println!("     Gross Dividends:   ${:>12}", total_dividends);
+    println!("     Tax Withheld:      ${:>12}", (total_dividends * withholding_rate).round_dp(2));
+    println!("     Net Distribution:  ${:>12}", (total_dividends * (dec!(1) - withholding_rate)).round_dp(2));
+    println!();
+
+    // =========================================================================
+    // Part 4: Manager Operations
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                    MANAGER OPERATIONS                        │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    for (name, ops) in scenario.managers() {
+        println!("  👔 Manager: {}", name);
+        for op in ops {
+            match &op {
+                simbank_dsl::ManagerOp::PaySalary { employee_account, amount, currency } => {
+                    println!("      💵 Pay Salary: {} {} to {}", amount, currency, employee_account);
+                }
+                simbank_dsl::ManagerOp::PayBonus { employee_account, amount, currency, reason } => {
+                    println!("      🎁 Pay Bonus: {} {} to {} ({})", amount, currency, employee_account, reason);
+                }
+                simbank_dsl::ManagerOp::PayDividend { shareholder_account, amount, currency } => {
+                    println!("      📈 Pay Dividend: {} {} to {}", amount, currency, shareholder_account);
+                }
+            }
+        }
+        println!();
+    }
+
+    // =========================================================================
+    // Part 5: Compliance & Rules
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                  COMPLIANCE RULES CHECK                      │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    // Define comprehensive rules
+    let ruleset = RuleSet::new()
+        .add(rule! {
+            name: "AML - Large Transaction"
+            when amount > 10000 USD
+            then flag_aml "large_amount"
+        })
+        .add(rule! {
+            name: "AML - Near Threshold"
+            when amount >= 9000 USD
+            then flag_aml "near_threshold"
+        })
+        .add(rule! {
+            name: "Withdrawal Limit"
+            when amount > 50000 USD
+            then require_approval
+        })
+        .add(rule! {
+            name: "Daily Transfer Limit"
+            when amount > 25000 USD
+            then require_approval
+        });
+
+    // Check key transactions
+    let check_transactions = vec![
+        ("Alice Premium Deposit", dec!(50000), "USD", "deposit"),
+        ("Ivy Investments Dividend", dec!(50000), "USD", "dividend"),
+        ("Carlos International Transfer", dec!(8000), "EUR", "transfer"),
+        ("Bob Regular Deposit", dec!(2000), "USD", "deposit"),
+    ];
+
+    println!("  Transaction Compliance Checks:\n");
+    println!("  {:<30} {:>12} {:<8} {}", "TRANSACTION", "AMOUNT", "CUR", "STATUS");
+    println!("  {}", "─".repeat(65));
+
+    for (desc, amount, currency, tx_type) in check_transactions {
+        let ctx = TransactionContext::new()
+            .with_amount(amount, currency)
+            .with_tx_type(tx_type)
+            .with_location("US");
+
+        let actions = ruleset.evaluate(&ctx);
+        let status = if actions.is_empty() {
+            "✅ Approved".to_string()
+        } else {
+            format!("⚠️  {} rules triggered", actions.len())
+        };
+
+        println!("  {:<30} {:>12} {:<8} {}", desc, amount, currency, status);
+    }
+    println!();
+
+    // =========================================================================
+    // Part 6: Financial Summary
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                    Q4 2025 FINANCIAL SUMMARY                 │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    let total_outflows = total_withdrawals + total_salary + total_dividends;
+
+    println!("  📈 INFLOWS:");
+    println!("     Customer Deposits:     ${:>12}", total_deposits);
+    println!();
+
+    println!("  📉 OUTFLOWS:");
+    println!("     Customer Withdrawals:  ${:>12}", total_withdrawals);
+    println!("     Payroll (Salary):      ${:>12}", total_salary);
+    println!("     Dividend Payments:     ${:>12}", total_dividends);
+    println!("     ─────────────────────────────────");
+    println!("     Total Outflows:        ${:>12}", total_outflows);
+    println!();
+
+    println!("  💼 NET POSITION:");
+    let net_cash = total_deposits - total_outflows;
+    let net_emoji = if net_cash >= dec!(0) { "🟢" } else { "🔴" };
+    println!("     {} Net Cash Flow:        ${:>12}", net_emoji, net_cash);
+    println!();
+
+    // =========================================================================
+    // Part 7: Audit Trail
+    // =========================================================================
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                       AUDIT TRAIL                            │");
+    println!("└─────────────────────────────────────────────────────────────┘\n");
+
+    for (name, ops) in scenario.auditors() {
+        println!("  🔍 Auditor: {}", name);
+        for op in ops {
+            match &op {
+                simbank_dsl::AuditorOp::Scan { from_date, to_date, flags } => {
+                    let date_range = match (from_date, to_date) {
+                        (Some(from), Some(to)) => format!("{} to {}", from, to),
+                        (Some(from), None) => format!("{} onwards", from),
+                        _ => "All time".to_string(),
+                    };
+                    println!("      📅 Scan: {} | Flags: {:?}", date_range, flags);
+                }
+                simbank_dsl::AuditorOp::Report { format } => {
+                    println!("      📄 Report: {}", format);
+                }
+            }
+        }
+        println!();
+    }
+
+    // Count operations
+    let customer_count = scenario.customers().count();
+    let employee_count = scenario.employees().count();
+    let shareholder_count = scenario.shareholders().count();
+    let manager_count = scenario.managers().count();
+    let auditor_count = scenario.auditors().count();
+
+    println!("  📊 Scenario Statistics:");
+    println!("     Customers:    {}", customer_count);
+    println!("     Employees:    {}", employee_count);
+    println!("     Shareholders: {}", shareholder_count);
+    println!("     Managers:     {}", manager_count);
+    println!("     Auditors:     {}", auditor_count);
+    println!("     ────────────────────");
+    println!("     Total Actors: {}",
+             customer_count + employee_count + shareholder_count + manager_count + auditor_count);
+    println!();
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║           ✅ Complex Scenario Example Completed!                 ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+}
+
+```
+
+## File ./simbank\examples\src\lib.rs:
+```rust
+//! # Simbank Examples
+//!
+//! This crate contains example scenarios demonstrating Simbank DSL usage.
+//!
+//! ## Available Examples
+//!
+//! 1. **01_customer_onboarding** - Customer workflow: deposit, transfer, withdraw
+//! 2. **02_employee_operations** - Employee payroll: salary, bonus, insurance
+//! 3. **03_shareholder_dividends** - Dividend distribution with tax calculations
+//! 4. **04_auditor_aml_scan** - AML compliance scanning and reporting
+//! 5. **05_complex_scenario** - Multi-stakeholder complete scenario
+//!
+//! ## Running Examples
+//!
+//! ```bash
+//! cd simbank
+//! cargo run -p simbank-examples --example 01_customer_onboarding
+//! cargo run -p simbank-examples --example 02_employee_operations
+//! cargo run -p simbank-examples --example 03_shareholder_dividends
+//! cargo run -p simbank-examples --example 04_auditor_aml_scan
+//! cargo run -p simbank-examples --example 05_complex_scenario
+//! ```
+
+// This crate only contains examples, no library code.
 
 ```
 
