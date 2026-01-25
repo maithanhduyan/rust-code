@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package websocket;
+
+// Message types
+enum MessageType {
+    UNKNOWN = 0;
+    CHAT = 1;
+    JOIN = 2;
+    LEAVE = 3;
+    SYSTEM = 4;
+    PING = 5;
+    PONG = 6;
+    ACK = 7;
+}
+
+// Main chat message
+message ChatMessage {
+    uint64 id = 1;
+    MessageType type = 2;
+    uint64 user_id = 3;
+    string username = 4;
+    bytes payload = 5;
+    int64 timestamp = 6;
+    string room = 7;
+}
+
+// Client handshake
+message Handshake {
+    string username = 1;
+    string token = 2;
+    repeated string rooms = 3;
+}
+
+// Server response
+message ServerResponse {
+    bool success = 1;
+    string message = 2;
+    uint64 user_id = 3;
+}
+
+// Batch messages for efficiency
+message BatchMessages {
+    repeated ChatMessage messages = 1;
+}
