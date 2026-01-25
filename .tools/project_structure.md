@@ -1,5 +1,5 @@
 ---
-date: 2026-01-25 20:52:47 
+date: 2026-01-25 21:04:47 
 ---
 
 # Cấu trúc Dự án như sau:
@@ -19,6 +19,16 @@ date: 2026-01-25 20:52:47
 │   │       ├── management.rs
 │   │       ├── services.rs
 │   │       └── shareholder.rs
+│   ├── cli
+│   │   ├── Cargo.toml
+│   │   └── src
+│   │       ├── commands
+│   │       │   ├── account.rs
+│   │       │   ├── audit.rs
+│   │       │   ├── mod.rs
+│   │       │   └── wallet.rs
+│   │       ├── db.rs
+│   │       └── main.rs
 │   ├── core
 │   │   ├── Cargo.toml
 │   │   └── src
@@ -1442,6 +1452,1289 @@ impl<'a> ShareholderService<'a> {
         Ok(TransactionResult::new(&txn_id, &event_id, amount, currency)
             .with_to_wallet(WalletType::Funding))
     }
+}
+
+```
+
+## File ./simbank\crates\cli\src\db.rs:
+```rust
+//! Database initialization and status
+
+use anyhow::{Context, Result};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
+use std::path::Path;
+use std::str::FromStr;
+
+/// Initialize the database with schema
+pub async fn init_database(db_path: &Path, force: bool) -> Result<()> {
+    if force && db_path.exists() {
+        std::fs::remove_file(db_path).context("Failed to remove existing database")?;
+        println!("🗑️  Removed existing database");
+    }
+
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let options = SqliteConnectOptions::from_str(&db_url)?
+        .create_if_missing(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .context("Failed to connect to database")?;
+
+    // Run schema creation
+    create_schema(&pool).await?;
+    seed_data(&pool).await?;
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Show database status
+pub async fn show_status(db_path: &Path) -> Result<()> {
+    if !db_path.exists() {
+        println!("❌ Database not found at {:?}", db_path);
+        println!("   Run 'simbank init' to create the database");
+        return Ok(());
+    }
+
+    let db_url = format!("sqlite:{}", db_path.display());
+    let pool = SqlitePool::connect(&db_url).await?;
+
+    println!("📊 Database Status");
+    println!("   Path: {:?}", db_path);
+    println!();
+
+    // Count records
+    let person_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM persons")
+        .fetch_one(&pool)
+        .await
+        .unwrap_or((0,));
+
+    let account_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap_or((0,));
+
+    let wallet_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wallets")
+        .fetch_one(&pool)
+        .await
+        .unwrap_or((0,));
+
+    let tx_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions")
+        .fetch_one(&pool)
+        .await
+        .unwrap_or((0,));
+
+    println!("   Persons:      {}", person_count.0);
+    println!("   Accounts:     {}", account_count.0);
+    println!("   Wallets:      {}", wallet_count.0);
+    println!("   Transactions: {}", tx_count.0);
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Create database schema
+async fn create_schema(pool: &SqlitePool) -> Result<()> {
+    println!("📦 Creating schema...");
+
+    sqlx::query(
+        r#"
+        -- Wallet types enum table
+        CREATE TABLE IF NOT EXISTS wallet_types (
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT
+        );
+
+        -- Currencies with dynamic decimals
+        CREATE TABLE IF NOT EXISTS currencies (
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            decimals INTEGER NOT NULL,
+            symbol TEXT
+        );
+
+        -- Person types
+        CREATE TABLE IF NOT EXISTS persons (
+            id TEXT PRIMARY KEY,
+            person_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Accounts (1:1 with Person)
+        CREATE TABLE IF NOT EXISTS accounts (
+            id TEXT PRIMARY KEY,
+            person_id TEXT NOT NULL UNIQUE,
+            status TEXT DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES persons(id)
+        );
+
+        -- Wallets
+        CREATE TABLE IF NOT EXISTS wallets (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            wallet_type TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(account_id, wallet_type),
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (wallet_type) REFERENCES wallet_types(code)
+        );
+
+        -- Balances
+        CREATE TABLE IF NOT EXISTS balances (
+            wallet_id TEXT NOT NULL,
+            currency_code TEXT NOT NULL,
+            available TEXT NOT NULL DEFAULT '0',
+            locked TEXT NOT NULL DEFAULT '0',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (wallet_id, currency_code),
+            FOREIGN KEY (wallet_id) REFERENCES wallets(id),
+            FOREIGN KEY (currency_code) REFERENCES currencies(code)
+        );
+
+        -- Transactions
+        CREATE TABLE IF NOT EXISTS transactions (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            wallet_id TEXT NOT NULL,
+            tx_type TEXT NOT NULL,
+            amount TEXT NOT NULL,
+            currency_code TEXT NOT NULL,
+            description TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (wallet_id) REFERENCES wallets(id)
+        );
+        "#,
+    )
+    .execute(pool)
+    .await
+    .context("Failed to create schema")?;
+
+    Ok(())
+}
+
+/// Seed reference data
+async fn seed_data(pool: &SqlitePool) -> Result<()> {
+    println!("🌱 Seeding reference data...");
+
+    // Wallet types
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO wallet_types VALUES
+            ('spot', 'Spot Wallet', 'For trading'),
+            ('funding', 'Funding Wallet', 'For deposit/withdraw'),
+            ('margin', 'Margin Wallet', 'For margin trading'),
+            ('futures', 'Futures Wallet', 'For futures contracts'),
+            ('earn', 'Earn Wallet', 'For staking/savings')
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Currencies
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO currencies VALUES
+            ('VND', 'Vietnamese Dong', 0, '₫'),
+            ('USD', 'US Dollar', 2, '$'),
+            ('USDT', 'Tether', 6, '₮'),
+            ('BTC', 'Bitcoin', 8, '₿'),
+            ('ETH', 'Ethereum', 18, 'Ξ')
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Connect to database pool
+pub async fn connect(db_path: &Path) -> Result<SqlitePool> {
+    let db_url = format!("sqlite:{}", db_path.display());
+    SqlitePool::connect(&db_url)
+        .await
+        .context("Failed to connect to database. Run 'simbank init' first.")
+}
+
+```
+
+## File ./simbank\crates\cli\src\main.rs:
+```rust
+//! Simbank CLI - Banking operations from command line
+//!
+//! Usage:
+//! ```bash
+//! simbank account create --type customer --name "Alice"
+//! simbank deposit ACC_001 100 USDT --to funding
+//! simbank transfer ACC_001 50 USDT --from funding --to spot
+//! simbank withdraw ACC_001 30 USDT --from funding
+//! simbank audit --from 2026-01-01 --flags large_amount
+//! simbank report --format markdown --output report.md
+//! ```
+
+use anyhow::Result;
+use clap::{Parser, Subcommand, ValueEnum};
+use rust_decimal::Decimal;
+use std::path::PathBuf;
+
+mod commands;
+mod db;
+
+use commands::{account, audit, wallet};
+
+/// Simbank - A banking DSL demonstration with SQLite + Event Sourcing
+#[derive(Parser)]
+#[command(name = "simbank")]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    /// Database file path
+    #[arg(long, default_value = "data/simbank.db", global = true)]
+    pub db: PathBuf,
+
+    /// Events directory path
+    #[arg(long, default_value = "data/events", global = true)]
+    pub events_dir: PathBuf,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Account management
+    Account {
+        #[command(subcommand)]
+        action: AccountAction,
+    },
+
+    /// Deposit funds to an account
+    Deposit {
+        /// Account ID (e.g., ACC_001)
+        account_id: String,
+        /// Amount to deposit
+        amount: Decimal,
+        /// Currency code (e.g., USD, USDT, BTC)
+        currency: String,
+        /// Target wallet type
+        #[arg(long, default_value = "funding")]
+        to: WalletTypeArg,
+    },
+
+    /// Withdraw funds from an account
+    Withdraw {
+        /// Account ID
+        account_id: String,
+        /// Amount to withdraw
+        amount: Decimal,
+        /// Currency code
+        currency: String,
+        /// Source wallet type
+        #[arg(long, default_value = "funding")]
+        from: WalletTypeArg,
+    },
+
+    /// Transfer funds between wallets (internal)
+    Transfer {
+        /// Account ID
+        account_id: String,
+        /// Amount to transfer
+        amount: Decimal,
+        /// Currency code
+        currency: String,
+        /// Source wallet type
+        #[arg(long)]
+        from: WalletTypeArg,
+        /// Destination wallet type
+        #[arg(long)]
+        to: WalletTypeArg,
+    },
+
+    /// Audit transactions for AML compliance
+    Audit {
+        /// Start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+        /// End date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+        /// AML flags to filter (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        flags: Option<Vec<String>>,
+        /// Account ID to audit (optional)
+        #[arg(long)]
+        account: Option<String>,
+    },
+
+    /// Generate reports
+    Report {
+        /// Report format
+        #[arg(long, default_value = "markdown")]
+        format: ReportFormat,
+        /// Output file path
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Report type
+        #[arg(long, default_value = "aml")]
+        report_type: ReportType,
+    },
+
+    /// Initialize database with schema and seed data
+    Init {
+        /// Force re-initialization (drops existing data)
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show database status
+    Status,
+}
+
+#[derive(Subcommand)]
+pub enum AccountAction {
+    /// Create a new account
+    Create {
+        /// Person type
+        #[arg(long, short = 't')]
+        r#type: PersonTypeArg,
+        /// Person name
+        #[arg(long, short)]
+        name: String,
+        /// Email (optional)
+        #[arg(long, short)]
+        email: Option<String>,
+    },
+    /// List all accounts
+    List {
+        /// Filter by person type
+        #[arg(long, short = 't')]
+        r#type: Option<PersonTypeArg>,
+    },
+    /// Show account details
+    Show {
+        /// Account ID
+        account_id: String,
+    },
+    /// Show account balances
+    Balance {
+        /// Account ID
+        account_id: String,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum PersonTypeArg {
+    Customer,
+    Employee,
+    Shareholder,
+    Manager,
+    Auditor,
+}
+
+impl PersonTypeArg {
+    pub fn to_core_type(&self) -> simbank_core::PersonType {
+        match self {
+            PersonTypeArg::Customer => simbank_core::PersonType::Customer,
+            PersonTypeArg::Employee => simbank_core::PersonType::Employee,
+            PersonTypeArg::Shareholder => simbank_core::PersonType::Shareholder,
+            PersonTypeArg::Manager => simbank_core::PersonType::Manager,
+            PersonTypeArg::Auditor => simbank_core::PersonType::Auditor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum WalletTypeArg {
+    Spot,
+    Funding,
+    Margin,
+    Futures,
+    Earn,
+}
+
+impl WalletTypeArg {
+    pub fn to_core_type(&self) -> simbank_core::WalletType {
+        match self {
+            WalletTypeArg::Spot => simbank_core::WalletType::Spot,
+            WalletTypeArg::Funding => simbank_core::WalletType::Funding,
+            WalletTypeArg::Margin => simbank_core::WalletType::Margin,
+            WalletTypeArg::Futures => simbank_core::WalletType::Futures,
+            WalletTypeArg::Earn => simbank_core::WalletType::Earn,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ReportFormat {
+    Csv,
+    Json,
+    Markdown,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ReportType {
+    Aml,
+    Transactions,
+    Accounts,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt::init();
+
+    let cli = Cli::parse();
+
+    // Ensure data directories exist
+    if let Some(parent) = cli.db.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::create_dir_all(&cli.events_dir).ok();
+
+    match cli.command {
+        Commands::Init { force } => {
+            db::init_database(&cli.db, force).await?;
+            println!("✅ Database initialized at {:?}", cli.db);
+        }
+
+        Commands::Status => {
+            db::show_status(&cli.db).await?;
+        }
+
+        Commands::Account { action } => {
+            account::handle(&cli.db, &cli.events_dir, action).await?;
+        }
+
+        Commands::Deposit {
+            account_id,
+            amount,
+            currency,
+            to,
+        } => {
+            wallet::deposit(&cli.db, &cli.events_dir, &account_id, amount, &currency, to).await?;
+        }
+
+        Commands::Withdraw {
+            account_id,
+            amount,
+            currency,
+            from,
+        } => {
+            wallet::withdraw(&cli.db, &cli.events_dir, &account_id, amount, &currency, from).await?;
+        }
+
+        Commands::Transfer {
+            account_id,
+            amount,
+            currency,
+            from,
+            to,
+        } => {
+            wallet::transfer(&cli.db, &cli.events_dir, &account_id, amount, &currency, from, to).await?;
+        }
+
+        Commands::Audit {
+            from,
+            to,
+            flags,
+            account,
+        } => {
+            audit::run_audit(&cli.events_dir, from, to, flags, account).await?;
+        }
+
+        Commands::Report {
+            format,
+            output,
+            report_type,
+        } => {
+            audit::generate_report(&cli.events_dir, format, output, report_type).await?;
+        }
+    }
+
+    Ok(())
+}
+
+```
+
+## File ./simbank\crates\cli\src\commands\account.rs:
+```rust
+//! Account management commands
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use simbank_core::{Event, PersonType, WalletType};
+use simbank_persistence::EventStore;
+use sqlx::SqlitePool;
+use std::path::Path;
+
+use crate::db;
+use crate::{AccountAction, PersonTypeArg};
+
+/// Handle account subcommands
+pub async fn handle(db_path: &Path, events_dir: &Path, action: AccountAction) -> Result<()> {
+    let pool = db::connect(db_path).await?;
+    let events = EventStore::new(events_dir)?;
+
+    match action {
+        AccountAction::Create { r#type, name, email } => {
+            create_account(&pool, &events, r#type, &name, email.as_deref()).await?;
+        }
+        AccountAction::List { r#type } => {
+            list_accounts(&pool, r#type).await?;
+        }
+        AccountAction::Show { account_id } => {
+            show_account(&pool, &account_id).await?;
+        }
+        AccountAction::Balance { account_id } => {
+            show_balance(&pool, &account_id).await?;
+        }
+    }
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Create a new account
+async fn create_account(
+    pool: &SqlitePool,
+    events: &EventStore,
+    person_type: PersonTypeArg,
+    name: &str,
+    email: Option<&str>,
+) -> Result<()> {
+    let core_type = person_type.to_core_type();
+
+    // Generate IDs
+    let person_id = generate_person_id(pool, &core_type).await?;
+    let account_id = generate_account_id(pool).await?;
+
+    // Insert person
+    sqlx::query(
+        "INSERT INTO persons (id, person_type, name, email, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&person_id)
+    .bind(core_type.as_str())
+    .bind(name)
+    .bind(email)
+    .bind(Utc::now())
+    .execute(pool)
+    .await
+    .context("Failed to create person")?;
+
+    // Insert account
+    sqlx::query("INSERT INTO accounts (id, person_id, status, created_at) VALUES (?, ?, 'active', ?)")
+        .bind(&account_id)
+        .bind(&person_id)
+        .bind(Utc::now())
+        .execute(pool)
+        .await
+        .context("Failed to create account")?;
+
+    // Create wallets based on person type
+    let wallet_types = get_wallet_types_for_person(&core_type);
+    for wallet_type in &wallet_types {
+        let wallet_id = generate_wallet_id(pool).await?;
+        sqlx::query(
+            "INSERT INTO wallets (id, account_id, wallet_type, status, created_at) VALUES (?, ?, ?, 'active', ?)",
+        )
+        .bind(&wallet_id)
+        .bind(&account_id)
+        .bind(wallet_type.as_str())
+        .bind(Utc::now())
+        .execute(pool)
+        .await
+        .context("Failed to create wallet")?;
+    }
+
+    // Record event
+    let event = Event::new(
+        format!("EVT_ACC_{}", account_id),
+        simbank_core::EventType::AccountCreated,
+        person_id.clone(),
+        core_type,
+        account_id.clone(),
+    );
+    events.append(&event)?;
+
+    println!("✅ Created {} account:", core_type.as_str());
+    println!("   Person ID:  {}", person_id);
+    println!("   Account ID: {}", account_id);
+    println!("   Name:       {}", name);
+    if let Some(email) = email {
+        println!("   Email:      {}", email);
+    }
+    println!("   Wallets:    {:?}", wallet_types.iter().map(|w| w.as_str()).collect::<Vec<_>>());
+
+    Ok(())
+}
+
+/// List accounts
+async fn list_accounts(pool: &SqlitePool, filter_type: Option<PersonTypeArg>) -> Result<()> {
+    let query = match filter_type {
+        Some(pt) => {
+            let type_str = pt.to_core_type().as_str();
+            sqlx::query_as::<_, (String, String, String, String, String)>(
+                r#"
+                SELECT a.id, p.id, p.name, p.person_type, a.status
+                FROM accounts a
+                JOIN persons p ON a.person_id = p.id
+                WHERE p.person_type = ?
+                ORDER BY a.created_at DESC
+                "#,
+            )
+            .bind(type_str)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, (String, String, String, String, String)>(
+                r#"
+                SELECT a.id, p.id, p.name, p.person_type, a.status
+                FROM accounts a
+                JOIN persons p ON a.person_id = p.id
+                ORDER BY a.created_at DESC
+                "#,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    if query.is_empty() {
+        println!("No accounts found.");
+        return Ok(());
+    }
+
+    println!("{:<12} {:<12} {:<20} {:<12} {:<8}", "ACCOUNT", "PERSON", "NAME", "TYPE", "STATUS");
+    println!("{}", "-".repeat(70));
+    for (acc_id, person_id, name, person_type, status) in query {
+        println!("{:<12} {:<12} {:<20} {:<12} {:<8}", acc_id, person_id, name, person_type, status);
+    }
+
+    Ok(())
+}
+
+/// Show account details
+async fn show_account(pool: &SqlitePool, account_id: &str) -> Result<()> {
+    let account = sqlx::query_as::<_, (String, String, String, String)>(
+        r#"
+        SELECT a.id, p.name, p.person_type, a.status
+        FROM accounts a
+        JOIN persons p ON a.person_id = p.id
+        WHERE a.id = ?
+        "#,
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match account {
+        Some((acc_id, name, person_type, status)) => {
+            println!("📋 Account Details");
+            println!("   Account ID: {}", acc_id);
+            println!("   Name:       {}", name);
+            println!("   Type:       {}", person_type);
+            println!("   Status:     {}", status);
+
+            // List wallets
+            let wallets = sqlx::query_as::<_, (String, String)>(
+                "SELECT id, wallet_type FROM wallets WHERE account_id = ?",
+            )
+            .bind(account_id)
+            .fetch_all(pool)
+            .await?;
+
+            println!("\n   Wallets:");
+            for (wallet_id, wallet_type) in wallets {
+                println!("     - {} ({})", wallet_id, wallet_type);
+            }
+        }
+        None => {
+            println!("❌ Account '{}' not found", account_id);
+        }
+    }
+
+    Ok(())
+}
+
+/// Show account balances
+async fn show_balance(pool: &SqlitePool, account_id: &str) -> Result<()> {
+    let balances = sqlx::query_as::<_, (String, String, String, String)>(
+        r#"
+        SELECT w.wallet_type, b.currency_code, b.available, b.locked
+        FROM wallets w
+        JOIN balances b ON w.id = b.wallet_id
+        WHERE w.account_id = ?
+        ORDER BY w.wallet_type, b.currency_code
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+
+    if balances.is_empty() {
+        println!("No balances found for account '{}'", account_id);
+        return Ok(());
+    }
+
+    println!("💰 Balances for {}", account_id);
+    println!("{:<12} {:<8} {:>18} {:>18}", "WALLET", "CURRENCY", "AVAILABLE", "LOCKED");
+    println!("{}", "-".repeat(60));
+    for (wallet_type, currency, available, locked) in balances {
+        println!("{:<12} {:<8} {:>18} {:>18}", wallet_type, currency, available, locked);
+    }
+
+    Ok(())
+}
+
+/// Get wallet types for a person type
+fn get_wallet_types_for_person(person_type: &PersonType) -> Vec<WalletType> {
+    match person_type {
+        PersonType::Customer => vec![WalletType::Spot, WalletType::Funding],
+        PersonType::Employee => vec![WalletType::Funding],
+        PersonType::Shareholder => vec![WalletType::Funding],
+        PersonType::Manager | PersonType::Auditor => vec![], // No wallets
+    }
+}
+
+/// Generate next person ID
+async fn generate_person_id(pool: &SqlitePool, person_type: &PersonType) -> Result<String> {
+    let prefix = match person_type {
+        PersonType::Customer => "CUST",
+        PersonType::Employee => "EMP",
+        PersonType::Shareholder => "SH",
+        PersonType::Manager => "MGR",
+        PersonType::Auditor => "AUD",
+    };
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM persons WHERE person_type = ?")
+        .bind(person_type.as_str())
+        .fetch_one(pool)
+        .await?;
+
+    Ok(format!("{}_{:03}", prefix, count.0 + 1))
+}
+
+/// Generate next account ID
+async fn generate_account_id(pool: &SqlitePool) -> Result<String> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM accounts")
+        .fetch_one(pool)
+        .await?;
+    Ok(format!("ACC_{:03}", count.0 + 1))
+}
+
+/// Generate next wallet ID
+async fn generate_wallet_id(pool: &SqlitePool) -> Result<String> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wallets")
+        .fetch_one(pool)
+        .await?;
+    Ok(format!("WAL_{:03}", count.0 + 1))
+}
+
+```
+
+## File ./simbank\crates\cli\src\commands\audit.rs:
+```rust
+//! Audit and Report commands
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use simbank_core::AmlFlag;
+use simbank_persistence::{EventFilter, EventReader};
+use simbank_reports::{
+    AmlReport, CsvExporter, JsonExporter, MarkdownExporter, ReportExporter, TransactionReport,
+};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::{ReportFormat, ReportType};
+
+/// Run AML audit on events
+pub async fn run_audit(
+    events_dir: &Path,
+    from: Option<String>,
+    to: Option<String>,
+    flags: Option<Vec<String>>,
+    account: Option<String>,
+) -> Result<()> {
+    // Parse flags
+    let aml_flags: Option<Vec<AmlFlag>> = flags.map(|f| {
+        f.iter()
+            .filter_map(|s| parse_aml_flag(s))
+            .collect()
+    });
+
+    // Build filter
+    let mut filter = EventFilter::new();
+    if let Some(acc) = &account {
+        filter = filter.account(acc);
+    }
+    if let Some(flags) = aml_flags {
+        filter = filter.aml_flags(flags);
+    }
+
+    // Read events based on date range
+    let reader = EventReader::new(events_dir);
+    let events = match (&from, &to) {
+        (Some(from_date), Some(to_date)) => reader.read_range(from_date, to_date)?,
+        (Some(from_date), None) => {
+            let today = Utc::now().format("%Y-%m-%d").to_string();
+            reader.read_range(from_date, &today)?
+        }
+        _ => reader.read_all()?,
+    };
+
+    // Apply filter
+    let events = filter.apply(events);
+
+    println!("🔍 AML Audit Report");
+    println!("   Events directory: {:?}", events_dir);
+    if let Some(from) = &from {
+        println!("   From: {}", from);
+    }
+    if let Some(to) = &to {
+        println!("   To: {}", to);
+    }
+    if let Some(account) = &account {
+        println!("   Account: {}", account);
+    }
+    println!();
+
+    if events.is_empty() {
+        println!("No events found matching criteria.");
+        return Ok(());
+    }
+
+    // Generate AML report
+    let report = AmlReport::generate("AML Audit", &events);
+
+    println!("{}", report.summary_text());
+
+    // Show flagged events
+    let flagged = report.flagged_events_sorted();
+    if !flagged.is_empty() {
+        println!("\n--- Flagged Events ---");
+        println!(
+            "{:<12} {:<12} {:<12} {:>12} {:<8} {:<16}",
+            "EVENT", "ACCOUNT", "TYPE", "AMOUNT", "CURRENCY", "FLAG"
+        );
+        println!("{}", "-".repeat(80));
+
+        for event in flagged.iter().take(20) {
+            println!(
+                "{:<12} {:<12} {:<12} {:>12} {:<8} {:<16}",
+                truncate(&event.event_id, 12),
+                truncate(&event.account_id, 12),
+                event.event_type,
+                event.amount,
+                event.currency,
+                event.flag.as_str()
+            );
+        }
+
+        if flagged.len() > 20 {
+            println!("... and {} more flagged events", flagged.len() - 20);
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate a report
+pub async fn generate_report(
+    events_dir: &Path,
+    format: ReportFormat,
+    output: Option<PathBuf>,
+    report_type: ReportType,
+) -> Result<()> {
+    // Read all events
+    let reader = EventReader::new(events_dir);
+    let events = reader.read_all()?;
+
+    if events.is_empty() {
+        println!("No events found. Nothing to report.");
+        return Ok(());
+    }
+
+    // Generate report content
+    let content = match report_type {
+        ReportType::Aml => {
+            let report = AmlReport::generate("AML Compliance Report", &events);
+            export_report(&report, format)
+        }
+        ReportType::Transactions => {
+            let report = TransactionReport::from_events("Transaction Report", &events);
+            export_report(&report, format)
+        }
+        ReportType::Accounts => {
+            // For accounts, we generate a simple transaction report grouped by account
+            let report = TransactionReport::from_events("Account Activity Report", &events);
+            export_report(&report, format)
+        }
+    };
+
+    // Output
+    match output {
+        Some(path) => {
+            fs::write(&path, &content).context("Failed to write report file")?;
+            println!("✅ Report generated: {:?}", path);
+        }
+        None => {
+            println!("{}", content);
+        }
+    }
+
+    Ok(())
+}
+
+/// Export report to specified format
+fn export_report(report: &dyn simbank_reports::ReportData, format: ReportFormat) -> String {
+    match format {
+        ReportFormat::Csv => CsvExporter::new().export(report),
+        ReportFormat::Json => JsonExporter::new().export(report),
+        ReportFormat::Markdown => MarkdownExporter::new().with_toc().export(report),
+    }
+}
+
+/// Parse AML flag string
+fn parse_aml_flag(s: &str) -> Option<AmlFlag> {
+    match s.to_lowercase().as_str() {
+        "large_amount" => Some(AmlFlag::LargeAmount),
+        "near_threshold" => Some(AmlFlag::NearThreshold),
+        "unusual_pattern" => Some(AmlFlag::UnusualPattern),
+        "cross_border" => Some(AmlFlag::CrossBorder),
+        "high_risk_country" => Some(AmlFlag::HighRiskCountry),
+        "new_account_large_tx" => Some(AmlFlag::NewAccountLargeTx),
+        "rapid_withdrawal" => Some(AmlFlag::RapidWithdrawal),
+        _ => None,
+    }
+}
+
+/// Truncate string for display
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max - 3])
+    }
+}
+
+```
+
+## File ./simbank\crates\cli\src\commands\mod.rs:
+```rust
+//! CLI Commands
+
+pub mod account;
+pub mod audit;
+pub mod wallet;
+
+```
+
+## File ./simbank\crates\cli\src\commands\wallet.rs:
+```rust
+//! Wallet operations: deposit, withdraw, transfer
+
+use anyhow::{bail, Result};
+use chrono::Utc;
+use rust_decimal::Decimal;
+use simbank_core::Event;
+use simbank_persistence::EventStore;
+use sqlx::SqlitePool;
+use std::path::Path;
+
+use crate::db;
+use crate::WalletTypeArg;
+
+/// Deposit funds to an account
+pub async fn deposit(
+    db_path: &Path,
+    events_dir: &Path,
+    account_id: &str,
+    amount: Decimal,
+    currency: &str,
+    to: WalletTypeArg,
+) -> Result<()> {
+    let pool = db::connect(db_path).await?;
+    let events = EventStore::new(events_dir)?;
+    let wallet_type = to.to_core_type();
+
+    // Validate account exists
+    let person_id = get_person_id(&pool, account_id).await?;
+
+    // Get wallet
+    let wallet_id = get_wallet(&pool, account_id, wallet_type.as_str()).await?;
+
+    // Update balance
+    update_balance(&pool, &wallet_id, currency, amount).await?;
+
+    // Record transaction
+    let tx_id = generate_tx_id(&pool).await?;
+    sqlx::query(
+        "INSERT INTO transactions (id, account_id, wallet_id, tx_type, amount, currency_code, description, created_at)
+         VALUES (?, ?, ?, 'deposit', ?, ?, ?, ?)",
+    )
+    .bind(&tx_id)
+    .bind(account_id)
+    .bind(&wallet_id)
+    .bind(amount.to_string())
+    .bind(currency)
+    .bind(format!("Deposit {} {} to {}", amount, currency, wallet_type.as_str()))
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    // Record event
+    let event = Event::deposit(&tx_id, &person_id, account_id, amount, currency);
+    events.append(&event)?;
+
+    println!("✅ Deposit successful!");
+    println!("   Transaction: {}", tx_id);
+    println!("   Amount:      {} {}", amount, currency);
+    println!("   To:          {} ({})", wallet_type.as_str(), wallet_id);
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Withdraw funds from an account
+pub async fn withdraw(
+    db_path: &Path,
+    events_dir: &Path,
+    account_id: &str,
+    amount: Decimal,
+    currency: &str,
+    from: WalletTypeArg,
+) -> Result<()> {
+    let pool = db::connect(db_path).await?;
+    let events = EventStore::new(events_dir)?;
+    let wallet_type = from.to_core_type();
+
+    // Validate account exists
+    let person_id = get_person_id(&pool, account_id).await?;
+
+    // Get wallet
+    let wallet_id = get_wallet(&pool, account_id, wallet_type.as_str()).await?;
+
+    // Check balance
+    let balance = get_balance(&pool, &wallet_id, currency).await?;
+    if balance < amount {
+        bail!(
+            "Insufficient balance: {} {} available, {} {} requested",
+            balance, currency, amount, currency
+        );
+    }
+
+    // Update balance (subtract)
+    update_balance(&pool, &wallet_id, currency, -amount).await?;
+
+    // Record transaction
+    let tx_id = generate_tx_id(&pool).await?;
+    sqlx::query(
+        "INSERT INTO transactions (id, account_id, wallet_id, tx_type, amount, currency_code, description, created_at)
+         VALUES (?, ?, ?, 'withdrawal', ?, ?, ?, ?)",
+    )
+    .bind(&tx_id)
+    .bind(account_id)
+    .bind(&wallet_id)
+    .bind(amount.to_string())
+    .bind(currency)
+    .bind(format!("Withdrawal {} {} from {}", amount, currency, wallet_type.as_str()))
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    // Record event
+    let event = Event::withdrawal(&tx_id, &person_id, account_id, amount, currency);
+    events.append(&event)?;
+
+    println!("✅ Withdrawal successful!");
+    println!("   Transaction: {}", tx_id);
+    println!("   Amount:      {} {}", amount, currency);
+    println!("   From:        {} ({})", wallet_type.as_str(), wallet_id);
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Transfer funds between wallets
+pub async fn transfer(
+    db_path: &Path,
+    events_dir: &Path,
+    account_id: &str,
+    amount: Decimal,
+    currency: &str,
+    from: WalletTypeArg,
+    to: WalletTypeArg,
+) -> Result<()> {
+    let pool = db::connect(db_path).await?;
+    let events = EventStore::new(events_dir)?;
+    let from_type = from.to_core_type();
+    let to_type = to.to_core_type();
+
+    if from_type == to_type {
+        bail!("Source and destination wallets must be different");
+    }
+
+    // Validate account exists
+    let person_id = get_person_id(&pool, account_id).await?;
+
+    // Get wallets
+    let from_wallet_id = get_wallet(&pool, account_id, from_type.as_str()).await?;
+    let to_wallet_id = get_wallet(&pool, account_id, to_type.as_str()).await?;
+
+    // Check balance
+    let balance = get_balance(&pool, &from_wallet_id, currency).await?;
+    if balance < amount {
+        bail!(
+            "Insufficient balance: {} {} available, {} {} requested",
+            balance, currency, amount, currency
+        );
+    }
+
+    // Update balances
+    update_balance(&pool, &from_wallet_id, currency, -amount).await?;
+    update_balance(&pool, &to_wallet_id, currency, amount).await?;
+
+    // Record transaction
+    let tx_id = generate_tx_id(&pool).await?;
+    sqlx::query(
+        "INSERT INTO transactions (id, account_id, wallet_id, tx_type, amount, currency_code, description, created_at)
+         VALUES (?, ?, ?, 'internal_transfer', ?, ?, ?, ?)",
+    )
+    .bind(&tx_id)
+    .bind(account_id)
+    .bind(&from_wallet_id)
+    .bind(amount.to_string())
+    .bind(currency)
+    .bind(format!("Transfer {} {} from {} to {}", amount, currency, from_type.as_str(), to_type.as_str()))
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    // Record event
+    let event = Event::internal_transfer(
+        &tx_id,
+        &person_id,
+        account_id,
+        from_type,
+        to_type,
+        amount,
+        currency,
+    );
+    events.append(&event)?;
+
+    println!("✅ Transfer successful!");
+    println!("   Transaction: {}", tx_id);
+    println!("   Amount:      {} {}", amount, currency);
+    println!("   From:        {} ({})", from_type.as_str(), from_wallet_id);
+    println!("   To:          {} ({})", to_type.as_str(), to_wallet_id);
+
+    pool.close().await;
+    Ok(())
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+async fn get_person_id(pool: &SqlitePool, account_id: &str) -> Result<String> {
+    let result = sqlx::query_as::<_, (String,)>(
+        "SELECT person_id FROM accounts WHERE id = ?",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match result {
+        Some((person_id,)) => Ok(person_id),
+        None => bail!("Account '{}' not found", account_id),
+    }
+}
+
+async fn get_wallet(pool: &SqlitePool, account_id: &str, wallet_type: &str) -> Result<String> {
+    let result = sqlx::query_as::<_, (String,)>(
+        "SELECT id FROM wallets WHERE account_id = ? AND wallet_type = ?",
+    )
+    .bind(account_id)
+    .bind(wallet_type)
+    .fetch_optional(pool)
+    .await?;
+
+    match result {
+        Some((wallet_id,)) => Ok(wallet_id),
+        None => bail!(
+            "Wallet type '{}' not found for account '{}'",
+            wallet_type,
+            account_id
+        ),
+    }
+}
+
+async fn get_balance(pool: &SqlitePool, wallet_id: &str, currency: &str) -> Result<Decimal> {
+    let result = sqlx::query_as::<_, (String,)>(
+        "SELECT available FROM balances WHERE wallet_id = ? AND currency_code = ?",
+    )
+    .bind(wallet_id)
+    .bind(currency)
+    .fetch_optional(pool)
+    .await?;
+
+    match result {
+        Some((available,)) => Ok(available.parse().unwrap_or(Decimal::ZERO)),
+        None => Ok(Decimal::ZERO),
+    }
+}
+
+async fn update_balance(
+    pool: &SqlitePool,
+    wallet_id: &str,
+    currency: &str,
+    delta: Decimal,
+) -> Result<()> {
+    // Try to update existing balance
+    let result = sqlx::query(
+        "UPDATE balances SET available = CAST((CAST(available AS REAL) + ?) AS TEXT), updated_at = ?
+         WHERE wallet_id = ? AND currency_code = ?",
+    )
+    .bind(delta.to_string())
+    .bind(Utc::now())
+    .bind(wallet_id)
+    .bind(currency)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        // Insert new balance record
+        let initial = if delta > Decimal::ZERO { delta } else { Decimal::ZERO };
+        sqlx::query(
+            "INSERT INTO balances (wallet_id, currency_code, available, locked, updated_at)
+             VALUES (?, ?, ?, '0', ?)",
+        )
+        .bind(wallet_id)
+        .bind(currency)
+        .bind(initial.to_string())
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn generate_tx_id(pool: &SqlitePool) -> Result<String> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions")
+        .fetch_one(pool)
+        .await?;
+    Ok(format!("TXN_{:03}", count.0 + 1))
 }
 
 ```
@@ -7208,6 +8501,7 @@ rust_decimal = { version = "1.33", features = ["serde-with-str"] }
 rust_decimal_macros = "1.33"
 thiserror = "2.0"
 anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.7", features = ["serde", "v4"] }
 tracing = "0.1"
