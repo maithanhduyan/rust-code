@@ -86,7 +86,7 @@ impl fmt::Display for EventType {
 /// AML (Anti-Money Laundering) flags.
 ///
 /// Các flag được gắn vào event để đánh dấu giao dịch đáng ngờ.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AmlFlag {
     /// Giao dịch lớn (> threshold)
