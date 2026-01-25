@@ -1,0 +1,10 @@
+[package]
+name = "reports"
+description = "Báo cáo và xuất dữ liệu nghiệp vụ ngân hàng"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+core-banking = { path = "../core-banking" }
+business = { path = "../business" }

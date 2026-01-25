@@ -1,0 +1,11 @@
+[package]
+name = "example-basic"
+description = "Ví dụ cơ bản sử dụng Banking DSL"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+core-banking = { path = "../../crates/core-banking" }
+business = { path = "../../crates/business" }
+dsl-macros = { path = "../../crates/dsl-macros" }

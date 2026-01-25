@@ -1,0 +1,9 @@
+[package]
+name = "business"
+description = "Business logic - Lãi suất bậc thang, thuế, phí quản lý"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+core-banking = { path = "../core-banking" }

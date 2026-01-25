@@ -1,15 +1,15 @@
-[package]
-name = "banking_dsl"
+[workspace]
+resolver = "2"
+members = [
+    "crates/core-banking",
+    "crates/business",
+    "crates/dsl-macros",
+    "crates/reports",
+    "examples/basic",
+    "examples/advanced",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "DSL cho nghiệp vụ tiền gửi ngân hàng - Rust Domain Specific Language"
 authors = ["Banking Team"]
-
-[dependencies]
-
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "banking_dsl"
-path = "src/main.rs"

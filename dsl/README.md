@@ -1,78 +1,148 @@
-# 🏦 Banking DSL - Ngôn ngữ đặc tả miền cho nghiệp vụ ngân hàng
+# 🏦 Banking DSL - Rust Workspace
 
-DSL (Domain Specific Language) trong Rust giúp chuyên viên ngân hàng mô tả sản phẩm tiền gửi bằng cú pháp gần với ngôn ngữ tự nhiên.
+Hệ thống DSL (Domain Specific Language) modular cho nghiệp vụ ngân hàng, được thiết kế theo kiến trúc phân lớp.
+
+## 📁 Kiến trúc
+
+```
+dsl/
+├── Cargo.toml                 # Workspace configuration
+├── crates/
+│   ├── core-banking/         # 🔧 Core types, traits & abstractions
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── types.rs      # VND, Percentage, AccountType
+│   │       ├── account.rs    # Account struct
+│   │       ├── transaction.rs# Transaction types
+│   │       └── traits.rs     # InterestCalculator, TaxCalculator, etc.
+│   │
+│   ├── business/             # 💼 Business logic
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── interest.rs   # Tiered interest rates
+│   │       ├── tax.rs        # Tax brackets & rules
+│   │       ├── fee.rs        # Fee schedules
+│   │       └── process.rs    # Yearly simulation process
+│   │
+│   ├── dsl-macros/           # 🎯 DSL Macros
+│   │   └── src/lib.rs        # tài_khoản!, lãi_suất!, thuế!, phí!, mô_phỏng!, nghiệp_vụ!
+│   │
+│   └── reports/              # 📊 Reporting & Export
+│       └── src/
+│           ├── lib.rs
+│           ├── summary.rs    # Account summary report
+│           ├── yearly.rs     # Yearly report
+│           └── export.rs     # CSV, JSON, Markdown exporters
+│
+└── examples/
+    ├── basic/                # Ví dụ cơ bản
+    └── advanced/             # Mô hình nghiệp vụ nâng cao
+```
 
 ## 🚀 Cài đặt và Chạy
 
 ```bash
-# Build project
-cargo build
-
-# Chạy demo
-cargo run
+# Build toàn bộ workspace
+cargo build --workspace
 
 # Chạy tests
-cargo test
+cargo test --workspace
+
+# Chạy ví dụ cơ bản
+cargo run -p example-basic
+
+# Chạy ví dụ nâng cao (lãi suất bậc thang, thuế)
+cargo run -p example-advanced
 ```
 
-## 📖 Cách sử dụng DSL
+## 📖 Sử dụng DSL
 
-### 1. Mở tài khoản tiết kiệm
+### 1. Tạo tài khoản
 ```rust
-use banking_dsl::*;
+use dsl_macros::*;
 
-let mut tk = tiet_kiem!(tiền_gửi 100.0);
+let mut tk = tài_khoản!(tiết_kiệm "TK001", 5000.0);
 ```
 
-### 2. Trừ phí quản lý hàng năm
+### 2. Định nghĩa lãi suất bậc thang
 ```rust
-tiet_kiem!(trừ_phí 1.0, cho tk);
+let interest = lãi_suất! {
+    tên: "Lãi suất tiết kiệm",
+    cấp: [
+        (0, 1000): 0.1% => "Cấp cơ bản",
+        (1000, 10000): 0.2% => "Cấp trung",
+        (10000, MAX): 0.15% => "Cấp cao",
+    ]
+};
 ```
 
-### 3. Cộng lãi suất
+### 3. Định nghĩa thuế
 ```rust
-tiet_kiem!(cộng_lãi 0.002, cho tk);  // Lãi suất 0.2%
+let tax = thuế! {
+    tên: "Thuế TNCN từ lãi",
+    quy_tắc: [
+        lãi_dưới 100 => Miễn,
+        lãi_dưới 500 => Thấp,
+    ],
+    mặc_định: Trung_bình
+};
 ```
 
-### 4. Gửi thêm / Rút tiền
+### 4. Mô phỏng nhiều năm
 ```rust
-tiet_kiem!(gửi_thêm 50.0, vào tk);
-tiet_kiem!(rút 30.0, từ tk);
+let results = mô_phỏng! {
+    tài_khoản: tk,
+    số_năm: 3,
+    lãi_suất: interest,
+    thuế: tax,
+    phí: fee_schedule
+};
 ```
 
-### 5. Mô phỏng nhiều năm
+### 5. DSL tổng hợp (all-in-one)
 ```rust
-mo_phong_nam!(3, tk, phí: 1.0, lãi: 0.002);
+let (account, results) = nghiệp_vụ! {
+    tài_khoản: tiết_kiệm("TK001", 10000.0),
+    lãi_suất: {
+        (0, 1000): 0.1%,
+        (1000, 10000): 0.2%,
+        (10000, MAX): 0.15%
+    },
+    thuế: {
+        lãi_dưới 100 => Miễn,
+        lãi_dưới 500 => Thấp,
+        mặc_định => Trung_bình
+    },
+    phí: 1.0,
+    mô_phỏng: 3
+};
 ```
 
-## 📋 Ví dụ nghiệp vụ
-
-**Yêu cầu:** Tiền gửi 100 triệu, phí quản lý 1 triệu/năm, lãi suất 0.2%/năm
+## 📊 Báo cáo
 
 ```rust
-let mut tai_khoan = tiet_kiem!(tiền_gửi 100.0);
-tiet_kiem!(trừ_phí 1.0, cho tai_khoan);
-tiet_kiem!(cộng_lãi 0.002, cho tai_khoan);
+use reports::{AccountSummary, YearlyReport, CsvExporter, ReportExporter};
 
-println!("Số dư: {:.2}", tiet_kiem!(số_dư tai_khoan));
-// Kết quả: 99.20 = (100 - 1) + (99 × 0.002)
+// Báo cáo tổng hợp tài khoản
+let summary = AccountSummary::from_account(&account);
+summary.display();
+
+// Xuất CSV
+let csv = CsvExporter.export(&results);
 ```
 
-## 🧩 Cấu trúc dự án
+## ✅ Ưu điểm kiến trúc
 
-```
-dsl/
-├── Cargo.toml          # Cấu hình project
-├── README.md           # Tài liệu này
-└── src/
-    ├── lib.rs          # DSL macros (tiet_kiem!, mo_phong_nam!)
-    ├── account.rs      # SavingsAccount struct
-    └── main.rs         # Demo program
-```
+| Layer | Responsibility |
+|-------|----------------|
+| **core-banking** | Types cơ bản, không phụ thuộc business logic |
+| **business** | Quy tắc nghiệp vụ có thể thay đổi theo chính sách |
+| **dsl-macros** | Cú pháp thân thiện cho người dùng cuối |
+| **reports** | Xuất báo cáo đa định dạng |
 
-## ✅ Ưu điểm DSL
+## 📈 Mở rộng
 
-- **Trực quan**: Cú pháp gần với ngôn ngữ tự nhiên
-- **An toàn kiểu**: Trình biên dịch Rust kiểm tra lỗi
-- **Hiệu năng cao**: Biên dịch xuống mã máy tối ưu
-- **Dễ mở rộng**: Thêm quy tắc nghiệp vụ mới dễ dàng
+- Thêm quy tắc lãi suất mới: Sửa `business/src/interest.rs`
+- Thêm loại thuế: Sửa `business/src/tax.rs`  
+- Thêm cú pháp DSL: Sửa `dsl-macros/src/lib.rs`
+- Thêm format báo cáo: Implement `ReportExporter` trait

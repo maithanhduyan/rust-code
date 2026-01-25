@@ -1,0 +1,8 @@
+[package]
+name = "core-banking"
+description = "Core banking types, traits và abstractions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]

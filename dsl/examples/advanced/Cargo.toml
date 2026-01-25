@@ -1,0 +1,12 @@
+[package]
+name = "example-advanced"
+description = "Ví dụ nâng cao - Lãi suất bậc thang và thuế"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+core-banking = { path = "../../crates/core-banking" }
+business = { path = "../../crates/business" }
+dsl-macros = { path = "../../crates/dsl-macros" }
+reports = { path = "../../crates/reports" }
