@@ -1,0 +1,13 @@
+[package]
+name = "bibank-dsl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank DSL - Domain specific language macros (future)"
+
+[dependencies]
+bibank-rpc.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

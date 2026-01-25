@@ -1,0 +1,21 @@
+[package]
+name = "bibank-projection"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank projection - Event to SQLite views"
+
+[dependencies]
+bibank-core.workspace = true
+bibank-ledger.workspace = true
+bibank-events.workspace = true
+bibank-bus.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rust_decimal.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

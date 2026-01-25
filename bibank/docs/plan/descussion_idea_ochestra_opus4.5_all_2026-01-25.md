@@ -498,3 +498,66 @@ Thiết kế đã **DESIGN LOCKED**. Sẵn sàng chuyển sang **Implementation 
 **Bạn muốn bắt đầu coding không?**
 
 Made changes.
+
+User: Analyze this codebase to generate or update `.github/copilot-instructions.md` for guiding AI coding agents.
+
+Focus on discovering the essential knowledge that would help an AI agents be immediately productive in this codebase. Consider aspects like:
+- The "big picture" architecture that requires reading multiple files to understand - major components, service boundaries, data flows, and the "why" behind structural decisions
+- Critical developer workflows (builds, tests, debugging) especially commands that aren't obvious from file inspection alone
+- Project-specific conventions and patterns that differ from common practices
+- Integration points, external dependencies, and cross-component communication patterns
+
+Source existing AI conventions from `**/{.github/copilot-instructions.md,AGENT.md,AGENTS.md,CLAUDE.md,.cursorrules,.windsurfrules,.clinerules,.cursor/rules/**,.windsurf/rules/**,.clinerules/**,README.md}` (do one glob search).
+
+Guidelines (read more at https://aka.ms/vscode-instructions-docs):
+- If `.github/copilot-instructions.md` exists, merge intelligently - preserve valuable content while updating outdated sections
+- Write concise, actionable instructions (~20-50 lines) using markdown structure
+- Include specific examples from the codebase when describing patterns
+- Avoid generic advice ("write tests", "handle errors") - focus on THIS project's specific approaches
+- Document only discoverable patterns, not aspirational practices
+- Reference key files/directories that exemplify important patterns
+
+Update `.github/copilot-instructions.md` for the user, then ask for feedback on any unclear or incomplete sections to iterate.
+
+GitHub Copilot: Searched for files matching `**/{.github/copilot-instructions.md,AGENT.md,AGENTS.md,CLAUDE.md,.cursorrules,.windsurfrules,.clinerules,.cursor/rules/**,.windsurf/rules/**,.clinerules/**,README.md}`, 8 matches
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/README.md)
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank)
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/.github)
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/docs)
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/docs/IDEA.md#1-1), lines 1 to 100
+
+Read [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/docs/plan)
+
+Now I have a good understanding of the BiBank project. Let me create the copilot-instructions.md file based on the Proposed-BiBank-Phase1.md specification and IDEA.md vision:
+
+Created [](file:///c%3A/Users/tiach/Downloads/rust-code/bibank/.github/copilot-instructions.md)
+
+## ✅ Created `.github/copilot-instructions.md`
+
+File đã được tạo tại .github/copilot-instructions.md với ~70 dòng, bao gồm:
+
+| Section | Nội dung |
+|---------|----------|
+| **Project Vision** | 4 nguyên tắc nền tảng của Financial State OS |
+| **Architecture** | Diagram + 8 crates với vai trò |
+| **Critical Patterns** | Double-entry example, AccountKey format, Intents, Tracing IDs |
+| **Invariants** | 6 rules không được vi phạm |
+| **Data Flow** | JSONL = truth, SQLite = disposable |
+| **Anti-Patterns** | 5 điều cần tránh |
+
+---
+
+### Câu hỏi phản hồi
+
+1. **Có cần thêm section về commands/workflow?** (ví dụ: `bibank init`, `bibank deposit`, `bibank replay`)
+
+2. **Có cần thêm ví dụ về Trade intent?** (multi-asset entry với 4 postings)
+
+3. **Có section nào chưa rõ hoặc cần chi tiết hơn không?**
+
+Made changes.

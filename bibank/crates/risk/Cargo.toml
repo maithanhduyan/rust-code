@@ -1,0 +1,18 @@
+[package]
+name = "bibank-risk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank risk engine - Pre-commit gatekeeper"
+
+[dependencies]
+bibank-core.workspace = true
+bibank-ledger.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

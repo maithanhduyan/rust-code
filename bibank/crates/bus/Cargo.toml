@@ -1,0 +1,15 @@
+[package]
+name = "bibank-bus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank event bus - In-process event distribution"
+
+[dependencies]
+bibank-events.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

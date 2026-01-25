@@ -1,0 +1,19 @@
+# Rust
+/target
+*.rs.bk
+Cargo.lock
+
+# Runtime data
+/data/journal/*.jsonl
+/data/projection.db
+/data/*.db
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

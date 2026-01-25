@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/ledger",
+    "crates/risk",
+    "crates/events",
+    "crates/bus",
+    "crates/projection",
+    "crates/rpc",
+    "crates/dsl",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["BiBank Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rust_decimal = { version = "1.33", features = ["serde-with-str", "maths"] }
+thiserror = "2.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Utilities
+strum = { version = "0.26", features = ["derive"] }
+strum_macros = "0.26"
+tokio = { version = "1.36", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1.7", features = ["serde", "v4"] }
+
+# Projection
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Internal crates
+bibank-core = { path = "./crates/core" }
+bibank-ledger = { path = "./crates/ledger" }
+bibank-risk = { path = "./crates/risk" }
+bibank-events = { path = "./crates/events" }
+bibank-bus = { path = "./crates/bus" }
+bibank-projection = { path = "./crates/projection" }
+bibank-rpc = { path = "./crates/rpc" }
+bibank-dsl = { path = "./crates/dsl" }

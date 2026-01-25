@@ -1,0 +1,30 @@
+[package]
+name = "bibank-rpc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank RPC - API/CLI orchestrator"
+
+[dependencies]
+bibank-core.workspace = true
+bibank-ledger.workspace = true
+bibank-risk.workspace = true
+bibank-events.workspace = true
+bibank-bus.workspace = true
+bibank-projection.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+
+[[bin]]
+name = "bibank"
+path = "src/main.rs"
+
+[dependencies.clap]
+workspace = true
