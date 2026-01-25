@@ -7,7 +7,7 @@
 //! - `wallet`: WalletType, Wallet, Balance
 //! - `person`: PersonType, Person
 //! - `account`: Account
-//! - `event`: Event, EventType, EventMetadata
+//! - `event`: Event, EventType, EventMetadata, AmlFlag
 //! - `error`: Domain errors
 
 pub mod money;
@@ -22,5 +22,5 @@ pub use money::{Currency, Money};
 pub use wallet::{WalletType, Wallet, Balance};
 pub use person::{PersonType, Person};
 pub use account::Account;
-pub use event::{Event, EventType, EventMetadata};
+pub use event::{Event, EventType, EventMetadata, AmlFlag};
 pub use error::CoreError;

@@ -38,6 +38,9 @@ uuid = { version = "1.7", features = ["serde", "v4"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+# Testing
+tempfile = "3.10"
+
 # Internal Crates
 simbank-core = { path = "./crates/core" }
 simbank-persistence = { path = "./crates/persistence" }
