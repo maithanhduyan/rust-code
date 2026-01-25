@@ -39,6 +39,9 @@ pub use sqlite::{
     init_database, AccountRepo, BalanceRepo, CurrencyRepo, PersonRepo, TransactionRepo,
     WalletRepo,
 };
+pub use sqlite::schema::{
+    AccountRow, BalanceRow, CurrencyRow, PersonRow, TransactionRow, WalletRow,
+};
 
 use sqlx::SqlitePool;
 use std::path::Path;
