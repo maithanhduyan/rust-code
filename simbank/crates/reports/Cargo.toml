@@ -1,0 +1,13 @@
+[package]
+name = "simbank-reports"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Report generation - CSV, JSON, Markdown, AML reports"
+
+[dependencies]
+simbank-core = { workspace = true }
+simbank-business = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

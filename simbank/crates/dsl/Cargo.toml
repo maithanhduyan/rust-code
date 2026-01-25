@@ -1,0 +1,10 @@
+[package]
+name = "simbank-dsl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "English DSL macros - banking_scenario!, rule!"
+
+[dependencies]
+simbank-core = { workspace = true }
+simbank-business = { workspace = true }

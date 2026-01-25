@@ -1,0 +1,15 @@
+[package]
+name = "simbank-persistence"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Persistence layer - SQLite + JSONL Event Store"
+
+[dependencies]
+simbank-core = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }

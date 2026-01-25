@@ -1,1 +1,29 @@
-data/
+# Simbank .gitignore
+
+# Runtime data
+data/simbank.db
+data/simbank.db-shm
+data/simbank.db-wal
+data/events/*.jsonl
+
+# Keep folder structure
+!data/.gitkeep
+!data/events/.gitkeep
+
+# Rust
+target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

@@ -1,0 +1,13 @@
+[package]
+name = "simbank-business"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Business logic layer - Customer, Employee, Auditor operations"
+
+[dependencies]
+simbank-core = { workspace = true }
+simbank-persistence = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

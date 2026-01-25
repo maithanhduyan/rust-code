@@ -1,0 +1,17 @@
+[package]
+name = "simbank-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Core domain types for Simbank - Currency, Money, Wallet, Person, Event"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+rust_decimal_macros = "1.33"

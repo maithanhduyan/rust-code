@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/persistence",
+    "crates/business",
+    "crates/dsl",
+    "crates/reports",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Simbank Team"]
+
+[workspace.dependencies]
+# Async Runtime
+tokio = { version = "1.36", features = ["full"] }
+
+# Database (SQLite)
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Money - serde-with-str để serialize Decimal thành String trong JSON
+rust_decimal = { version = "1.33", features = ["serde-with-str"] }
+rust_decimal_macros = "1.33"
+
+# Error Handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["serde", "v4"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Internal Crates
+simbank-core = { path = "./crates/core" }
+simbank-persistence = { path = "./crates/persistence" }
+simbank-business = { path = "./crates/business" }
+simbank-reports = { path = "./crates/reports" }
+simbank-dsl = { path = "./crates/dsl" }
