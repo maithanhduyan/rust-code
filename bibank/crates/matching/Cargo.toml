@@ -1,0 +1,21 @@
+[package]
+name = "bibank-matching"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank Order Matching Engine - CLOB with price-time priority"
+
+[dependencies]
+bibank-core = { path = "../core" }
+bibank-ledger = { path = "../ledger" }
+rust_decimal.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+rust_decimal_macros.workspace = true

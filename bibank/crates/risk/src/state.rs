@@ -3,9 +3,15 @@
 //! This state is rebuilt from ledger replay on startup.
 //! It tracks balances for pre-commit validation.
 
-use bibank_ledger::{AccountKey, JournalEntry, Posting};
+use bibank_ledger::{AccountCategory, AccountKey, JournalEntry, Posting};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+
+/// Constants for margin trading
+pub const MAX_LEVERAGE: Decimal = Decimal::from_parts(10, 0, 0, false, 0); // 10x
+pub const MAINTENANCE_MARGIN: Decimal = Decimal::from_parts(5, 0, 0, false, 2); // 5%
+pub const INITIAL_MARGIN: Decimal = Decimal::from_parts(10, 0, 0, false, 2); // 10%
+pub const LIQUIDATION_THRESHOLD: Decimal = Decimal::from_parts(1, 0, 0, false, 0); // Ratio < 1.0
 
 /// In-memory balance state for risk checking
 #[derive(Debug, Default)]
@@ -109,6 +115,130 @@ impl RiskState {
     pub fn clear(&mut self) {
         self.balances.clear();
     }
+
+    // === Phase 3: Margin Trading Methods ===
+
+    /// Create a LOAN account key for a user
+    pub fn loan_account(user: &str, asset: &str) -> AccountKey {
+        AccountKey::new(AccountCategory::Asset, "USER", user, asset, "LOAN")
+    }
+
+    /// Get the loan balance for a user/asset
+    /// LOAN is stored in ASSET:USER:*:*:LOAN
+    pub fn get_loan_balance(&self, user: &str, asset: &str) -> Decimal {
+        let account = Self::loan_account(user, asset);
+        self.get_balance(&account)
+    }
+
+    /// Get available balance for a user/asset
+    pub fn get_available_balance(&self, user: &str, asset: &str) -> Decimal {
+        let account = AccountKey::user_available(user, asset);
+        self.get_balance(&account)
+    }
+
+    /// Calculate equity for a user/asset
+    /// Equity = Available - Loan
+    /// Note: This is simplified - real equity would include unrealized PnL
+    pub fn get_equity(&self, user: &str, asset: &str) -> Decimal {
+        let available = self.get_available_balance(user, asset);
+        let loan = self.get_loan_balance(user, asset);
+        available - loan
+    }
+
+    /// Calculate margin ratio for a user/asset
+    /// Margin Ratio = (Available / Loan) if Loan > 0, else infinity (represented as 100.0)
+    pub fn get_margin_ratio(&self, user: &str, asset: &str) -> Decimal {
+        let available = self.get_available_balance(user, asset);
+        let loan = self.get_loan_balance(user, asset);
+
+        if loan <= Decimal::ZERO {
+            // No loan = infinite margin (represented as 100.0)
+            Decimal::from(100)
+        } else {
+            available / loan
+        }
+    }
+
+    /// Check if a borrow would exceed max leverage
+    /// Returns true if the borrow is allowed
+    pub fn check_borrow_allowed(
+        &self,
+        user: &str,
+        asset: &str,
+        borrow_amount: Decimal,
+    ) -> Result<(), MarginError> {
+        let current_available = self.get_available_balance(user, asset);
+        let current_loan = self.get_loan_balance(user, asset);
+
+        // After borrow: available += borrow_amount, loan += borrow_amount
+        let new_loan = current_loan + borrow_amount;
+
+        // When you borrow, your available goes up, your loan goes up by same amount
+        // So your equity (Available - Loan) stays the same
+        // The constraint is: Equity >= Loan * Initial_Margin
+        // Or: Equity / Loan >= Initial_Margin
+        // Or: current_available / new_loan >= Initial_Margin
+
+        let equity = current_available; // Equity doesn't change after borrow
+        if new_loan > Decimal::ZERO {
+            let margin_ratio = equity / new_loan;
+            if margin_ratio < INITIAL_MARGIN {
+                return Err(MarginError::ExceedsMaxLeverage {
+                    requested: borrow_amount.to_string(),
+                    max_allowed: (equity / INITIAL_MARGIN - current_loan).max(Decimal::ZERO).to_string(),
+                    current_margin_ratio: margin_ratio.to_string(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if a user is subject to liquidation
+    /// Returns true if margin ratio < 1.0
+    pub fn is_liquidatable(&self, user: &str, asset: &str) -> bool {
+        let margin_ratio = self.get_margin_ratio(user, asset);
+        margin_ratio < LIQUIDATION_THRESHOLD
+    }
+
+    /// Get all users with positions that may need liquidation
+    /// Scans all LOAN accounts and checks margin ratio
+    pub fn get_liquidatable_positions(&self) -> Vec<(String, String, Decimal)> {
+        let mut positions = Vec::new();
+
+        for (key, &balance) in &self.balances {
+            // Only check ASSET:USER:*:*:LOAN accounts with positive balance
+            if key.starts_with("ASSET:USER:") && key.ends_with(":LOAN") && balance > Decimal::ZERO {
+                // Parse: ASSET:USER:alice:USDT:LOAN
+                let parts: Vec<&str> = key.split(':').collect();
+                if parts.len() == 5 {
+                    let user = parts[2];
+                    let asset = parts[3];
+                    if self.is_liquidatable(user, asset) {
+                        let margin_ratio = self.get_margin_ratio(user, asset);
+                        positions.push((user.to_string(), asset.to_string(), margin_ratio));
+                    }
+                }
+            }
+        }
+
+        positions
+    }
+}
+
+/// Margin-related errors
+#[derive(Debug, Clone)]
+pub enum MarginError {
+    ExceedsMaxLeverage {
+        requested: String,
+        max_allowed: String,
+        current_margin_ratio: String,
+    },
+    InsufficientMargin {
+        user: String,
+        asset: String,
+        current_ratio: String,
+    },
 }
 
 #[cfg(test)]
@@ -293,5 +423,173 @@ mod tests {
         let violations = state.check_sufficient_balance(&trade);
         assert!(!violations.is_empty(), "Trade should fail - Alice has insufficient USDT");
         assert!(violations.iter().any(|(acc, _)| acc.contains("ALICE")));
+    }
+
+    // === Phase 3: Margin Trading tests ===
+
+    fn borrow_entry(user: &str, val: i64) -> JournalEntry {
+        JournalEntry {
+            sequence: 1,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Borrow,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                // ASSET:LOAN increases (BiBank's receivable)
+                Posting::debit(RiskState::loan_account(user, "USDT"), amount(val)),
+                // LIAB:AVAILABLE increases (User's balance)
+                Posting::credit(AccountKey::user_available(user, "USDT"), amount(val)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        }
+    }
+
+    fn repay_entry(user: &str, val: i64) -> JournalEntry {
+        JournalEntry {
+            sequence: 1,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Repay,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                // LIAB:AVAILABLE decreases (User pays)
+                Posting::debit(AccountKey::user_available(user, "USDT"), amount(val)),
+                // ASSET:LOAN decreases (BiBank's receivable)
+                Posting::credit(RiskState::loan_account(user, "USDT"), amount(val)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_borrow_updates_loan_balance() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100 USDT (equity)
+        state.apply_entry(&deposit_entry("ALICE", 100));
+
+        // Alice borrows 500 USDT (5x leverage, within 10x limit)
+        state.apply_entry(&borrow_entry("ALICE", 500));
+
+        // Check balances
+        let available = state.get_available_balance("ALICE", "USDT");
+        let loan = state.get_loan_balance("ALICE", "USDT");
+        let equity = state.get_equity("ALICE", "USDT");
+
+        assert_eq!(available, Decimal::new(600, 0), "Available = 100 + 500");
+        assert_eq!(loan, Decimal::new(500, 0), "Loan = 500");
+        assert_eq!(equity, Decimal::new(100, 0), "Equity = Available - Loan = 100");
+    }
+
+    #[test]
+    fn test_repay_reduces_loan_balance() {
+        let mut state = RiskState::new();
+
+        // Setup: Alice deposits 100, borrows 500
+        state.apply_entry(&deposit_entry("ALICE", 100));
+        state.apply_entry(&borrow_entry("ALICE", 500));
+
+        // Alice repays 200
+        state.apply_entry(&repay_entry("ALICE", 200));
+
+        let available = state.get_available_balance("ALICE", "USDT");
+        let loan = state.get_loan_balance("ALICE", "USDT");
+
+        assert_eq!(available, Decimal::new(400, 0), "Available = 600 - 200");
+        assert_eq!(loan, Decimal::new(300, 0), "Loan = 500 - 200");
+    }
+
+    #[test]
+    fn test_margin_ratio_calculation() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100, borrows 400
+        state.apply_entry(&deposit_entry("ALICE", 100));
+        state.apply_entry(&borrow_entry("ALICE", 400));
+
+        // Available = 500, Loan = 400
+        // Margin Ratio = Available / Loan = 500/400 = 1.25
+        let ratio = state.get_margin_ratio("ALICE", "USDT");
+        assert_eq!(ratio, Decimal::new(125, 2));
+    }
+
+    #[test]
+    fn test_margin_ratio_no_loan() {
+        let mut state = RiskState::new();
+
+        // Alice only deposits, no loan
+        state.apply_entry(&deposit_entry("ALICE", 100));
+
+        // No loan = infinite margin (represented as 100.0)
+        let ratio = state.get_margin_ratio("ALICE", "USDT");
+        assert_eq!(ratio, Decimal::from(100));
+    }
+
+    #[test]
+    fn test_borrow_allowed_within_limit() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100 USDT (equity)
+        state.apply_entry(&deposit_entry("ALICE", 100));
+
+        // Max borrow at 10x leverage = 100 / 0.10 = 1000
+        // Try to borrow 900 (within limit)
+        let result = state.check_borrow_allowed("ALICE", "USDT", Decimal::new(900, 0));
+        assert!(result.is_ok(), "Should allow borrow within limit");
+    }
+
+    #[test]
+    fn test_borrow_rejected_exceeds_leverage() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100 USDT (equity)
+        state.apply_entry(&deposit_entry("ALICE", 100));
+
+        // Max borrow = 100 / 0.10 = 1000
+        // Try to borrow 1100 (exceeds limit)
+        let result = state.check_borrow_allowed("ALICE", "USDT", Decimal::new(1100, 0));
+        assert!(matches!(result, Err(MarginError::ExceedsMaxLeverage { .. })));
+    }
+
+    #[test]
+    fn test_is_liquidatable() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100, borrows 900
+        state.apply_entry(&deposit_entry("ALICE", 100));
+        state.apply_entry(&borrow_entry("ALICE", 900));
+
+        // Available = 1000, Loan = 900
+        // Margin Ratio = 1000/900 = 1.11 > 1.0 (safe)
+        assert!(!state.is_liquidatable("ALICE", "USDT"));
+
+        // Simulate loss: Alice loses 200 (Available drops to 800)
+        // We can simulate by doing a transfer out
+        let loss_entry = JournalEntry {
+            sequence: 99,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Transfer,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(200)),
+                Posting::credit(AccountKey::user_available("SYSTEM", "USDT"), amount(200)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        };
+        state.apply_entry(&loss_entry);
+
+        // Now: Available = 800, Loan = 900
+        // Margin Ratio = 800/900 = 0.889 < 1.0 (liquidatable!)
+        assert!(state.is_liquidatable("ALICE", "USDT"));
     }
 }

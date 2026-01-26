@@ -36,6 +36,26 @@ pub enum TransactionIntent {
 
     /// Manual adjustment (audit-heavy, requires approval)
     Adjustment,
+
+    // === Phase 3: Margin Trading ===
+
+    /// Borrow funds for margin trading
+    Borrow,
+
+    /// Repay borrowed funds
+    Repay,
+
+    /// Interest accrual on borrowed funds (daily)
+    Interest,
+
+    /// Forced liquidation of margin position
+    Liquidation,
+
+    /// Order placement (lock funds)
+    OrderPlace,
+
+    /// Order cancellation (unlock funds)
+    OrderCancel,
 }
 
 /// Posting side - Debit or Credit

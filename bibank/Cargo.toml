@@ -8,6 +8,9 @@ members = [
     "crates/projection",
     "crates/rpc",
     "crates/dsl",
+    "crates/oracle",
+    "crates/matching",
+    "crates/approval",
 ]
 resolver = "2"
 
@@ -22,6 +25,7 @@ license = "MIT"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rust_decimal = { version = "1.33", features = ["serde-with-str", "maths"] }
+rust_decimal_macros = "1.33"
 thiserror = "2.0"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -60,4 +64,7 @@ bibank-events = { path = "./crates/events" }
 bibank-bus = { path = "./crates/bus" }
 bibank-projection = { path = "./crates/projection" }
 bibank-rpc = { path = "./crates/rpc" }
+bibank-matching = { path = "./crates/matching" }
+bibank-oracle = { path = "./crates/oracle" }
 bibank-dsl = { path = "./crates/dsl" }
+bibank-approval = { path = "./crates/approval" }

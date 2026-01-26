@@ -152,6 +152,83 @@ enum Commands {
         #[arg(long, default_value = "20")]
         limit: u32,
     },
+
+    // === Phase 3: Margin Trading ===
+
+    /// Borrow funds (margin trading)
+    Borrow {
+        /// User ID
+        user: String,
+        /// Amount to borrow
+        amount: Decimal,
+        /// Asset to borrow
+        asset: String,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Repay borrowed funds
+    Repay {
+        /// User ID
+        user: String,
+        /// Amount to repay
+        amount: Decimal,
+        /// Asset to repay
+        asset: String,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Place a limit order
+    PlaceOrder {
+        /// User ID
+        user: String,
+        /// Order side: buy or sell
+        side: String,
+        /// Base asset (e.g., BTC)
+        base: String,
+        /// Quote asset (e.g., USDT)
+        quote: String,
+        /// Limit price
+        price: Decimal,
+        /// Quantity (in base asset)
+        quantity: Decimal,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Cancel an open order
+    CancelOrder {
+        /// Order ID to cancel
+        order_id: String,
+        /// Base asset of the trading pair
+        base: String,
+        /// Quote asset of the trading pair
+        quote: String,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Check margin status for a user
+    MarginStatus {
+        /// User ID
+        user: String,
+    },
+
+    /// Show order book depth
+    OrderBook {
+        /// Base asset (e.g., BTC)
+        base: String,
+        /// Quote asset (e.g., USDT)
+        quote: String,
+        /// Number of price levels to show
+        #[arg(long, default_value = "10")]
+        depth: usize,
+    },
 }
 
 #[tokio::main]
@@ -336,6 +413,68 @@ async fn main() -> anyhow::Result<()> {
                 _ => None,
             };
             commands::trades(&ctx, user.as_deref(), pair, limit).await?;
+        }
+
+        // === Phase 3: Margin Trading ===
+
+        Commands::Borrow {
+            user,
+            amount,
+            asset,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            commands::borrow(&mut ctx, &user, amount, &asset, &correlation_id).await?;
+        }
+
+        Commands::Repay {
+            user,
+            amount,
+            asset,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            commands::repay(&mut ctx, &user, amount, &asset, &correlation_id).await?;
+        }
+
+        Commands::PlaceOrder {
+            user,
+            side,
+            base,
+            quote,
+            price,
+            quantity,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            commands::place_order(
+                &mut ctx,
+                &user,
+                &side,
+                &base,
+                &quote,
+                price,
+                quantity,
+                &correlation_id,
+            ).await?;
+        }
+
+        Commands::CancelOrder {
+            order_id,
+            base,
+            quote,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            commands::cancel_order(&mut ctx, &order_id, &base, &quote, &correlation_id).await?;
+        }
+
+        Commands::MarginStatus { user } => {
+            commands::margin_status(&ctx, &user).await?;
+        }
+
+        Commands::OrderBook { base, quote, depth } => {
+            commands::order_book(&ctx, &base, &quote, depth).await?;
         }
     }
 

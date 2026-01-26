@@ -1,4 +1,4 @@
-//! Integration tests for BiBank Phase 1
+//! Integration tests for BiBank
 //!
 //! These tests verify the complete flow from CLI commands through
 //! ledger, risk engine, events, and projections.
@@ -624,4 +624,185 @@ async fn test_trade_risk_blocks_insufficient() {
     // Balances should be unchanged
     let alice_usdt = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "USDT"));
     assert_eq!(alice_usdt, Decimal::new(50, 0));
+}
+
+// ============================================================================
+// Phase 3: Margin Trading Tests
+// ============================================================================
+
+/// Helper: Create loan account key
+fn loan_account(user: &str, asset: &str) -> AccountKey {
+    AccountKey::new(AccountCategory::Asset, "USER", user, asset, "LOAN")
+}
+
+/// Test: Borrow and Repay workflow
+#[tokio::test]
+async fn test_margin_borrow_repay() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Alice deposits 100 USDT (her equity)
+    let deposit = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-1")
+        .debit(AccountKey::system_vault("USDT"), amount(100))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit).await.unwrap();
+
+    // Alice borrows 500 USDT (5x leverage, within 10x limit)
+    let borrow = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Borrow)
+        .correlation_id("borrow-1")
+        .debit(loan_account("ALICE", "USDT"), amount(500))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(500))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(borrow).await.unwrap();
+
+    // Verify: Alice has 600 available, 500 loan
+    let alice_available = ctx.risk.state().get_available_balance("ALICE", "USDT");
+    let alice_loan = ctx.risk.state().get_loan_balance("ALICE", "USDT");
+    let alice_equity = ctx.risk.state().get_equity("ALICE", "USDT");
+
+    assert_eq!(alice_available, Decimal::new(600, 0), "Available = 100 + 500");
+    assert_eq!(alice_loan, Decimal::new(500, 0), "Loan = 500");
+    assert_eq!(alice_equity, Decimal::new(100, 0), "Equity = Available - Loan");
+
+    // Alice repays 200 USDT
+    let repay = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Repay)
+        .correlation_id("repay-1")
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(200))
+        .credit(loan_account("ALICE", "USDT"), amount(200))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(repay).await.unwrap();
+
+    // Verify: Alice has 400 available, 300 loan
+    let alice_available = ctx.risk.state().get_available_balance("ALICE", "USDT");
+    let alice_loan = ctx.risk.state().get_loan_balance("ALICE", "USDT");
+
+    assert_eq!(alice_available, Decimal::new(400, 0), "Available = 600 - 200");
+    assert_eq!(alice_loan, Decimal::new(300, 0), "Loan = 500 - 200");
+}
+
+/// Test: Interest accrual increases loan
+#[tokio::test]
+async fn test_margin_interest_accrual() {
+    use bibank_risk::InterestCalculator;
+
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Alice deposits 100, borrows 1000
+    let deposit = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-1")
+        .debit(AccountKey::system_vault("USDT"), amount(100))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit).await.unwrap();
+
+    let borrow = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Borrow)
+        .correlation_id("borrow-1")
+        .debit(loan_account("ALICE", "USDT"), amount(1000))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(1000))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(borrow).await.unwrap();
+
+    // Generate interest entries
+    let calc = InterestCalculator::new();
+    let interest_entries = calc.generate_interest_entries(ctx.risk.state(), "daily-2025-01-01");
+
+    assert_eq!(interest_entries.len(), 1, "Should have 1 interest entry for Alice");
+
+    // Commit interest entry
+    ctx.commit(interest_entries[0].clone()).await.unwrap();
+
+    // Verify: Loan increased by 0.5 (1000 * 0.0005)
+    let alice_loan = ctx.risk.state().get_loan_balance("ALICE", "USDT");
+    assert_eq!(alice_loan, Decimal::from_str_exact("1000.5").unwrap());
+}
+
+/// Test: Margin ratio calculation
+#[tokio::test]
+async fn test_margin_ratio_tracking() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Alice deposits 100, borrows 400
+    let deposit = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-1")
+        .debit(AccountKey::system_vault("USDT"), amount(100))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit).await.unwrap();
+
+    let borrow = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Borrow)
+        .correlation_id("borrow-1")
+        .debit(loan_account("ALICE", "USDT"), amount(400))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(400))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(borrow).await.unwrap();
+
+    // Margin Ratio = Available / Loan = 500 / 400 = 1.25
+    let ratio = ctx.risk.state().get_margin_ratio("ALICE", "USDT");
+    assert_eq!(ratio, Decimal::from_str_exact("1.25").unwrap());
+
+    // Not liquidatable (ratio > 1.0)
+    assert!(!ctx.risk.state().is_liquidatable("ALICE", "USDT"));
 }

@@ -13,6 +13,7 @@ bibank-risk.workspace = true
 bibank-events.workspace = true
 bibank-bus.workspace = true
 bibank-projection.workspace = true
+bibank-matching.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

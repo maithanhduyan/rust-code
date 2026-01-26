@@ -2,6 +2,7 @@
 
 use bibank_core::Amount;
 use bibank_ledger::{AccountCategory, AccountKey, JournalEntryBuilder, TransactionIntent, validate_intent};
+use bibank_matching::{MatchingEngine, Order, OrderSide, TradingPair};
 use rust_decimal::Decimal;
 use serde_json::json;
 
@@ -298,6 +299,305 @@ pub async fn trades(
             trade.buy_asset,
         );
     }
+
+    Ok(())
+}
+
+// === Phase 3: Margin Trading Commands ===
+
+/// Borrow funds (margin trading)
+///
+/// Creates a loan by crediting user's available balance from system loan pool.
+pub async fn borrow(
+    ctx: &mut AppContext,
+    user_id: &str,
+    amount: Decimal,
+    asset: &str,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    let amount = Amount::new(amount)?;
+
+    // LIAB:USER:<USER_ID>:<ASSET>:LOAN - tracks user's loan obligation
+    let loan_account = AccountKey::new(
+        AccountCategory::Liability,
+        "USER",
+        user_id,
+        asset,
+        "LOAN",
+    );
+
+    // ASSET:SYSTEM:LENDING_POOL:<ASSET>:MAIN - system lending pool
+    let lending_pool = AccountKey::new(
+        AccountCategory::Asset,
+        "SYSTEM",
+        "LENDING_POOL",
+        asset,
+        "MAIN",
+    );
+
+    let entry = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Borrow)
+        .correlation_id(correlation_id)
+        // Debit lending pool (reduce system's lending funds)
+        .debit(lending_pool, amount)
+        // Credit loan liability (increase user's loan obligation)
+        .credit(loan_account, amount)
+        // Credit user's available balance
+        .credit(AccountKey::user_available(user_id, asset), amount)
+        // Debit a receivable (to maintain balance)
+        .debit(
+            AccountKey::new(AccountCategory::Asset, "SYSTEM", "LOANS_RECEIVABLE", asset, "MAIN"),
+            amount,
+        )
+        .metadata("loan_amount", json!(amount.to_string()))
+        .metadata("loan_asset", json!(asset))
+        .metadata("borrower", json!(user_id))
+        .build_unsigned()?;
+
+    validate_intent(&entry)?;
+
+    let committed = ctx.commit(entry).await?;
+
+    println!(
+        "✅ Borrowed {} {} for {} (seq: {})",
+        amount, asset, user_id, committed.sequence
+    );
+    Ok(())
+}
+
+/// Repay borrowed funds
+pub async fn repay(
+    ctx: &mut AppContext,
+    user_id: &str,
+    amount: Decimal,
+    asset: &str,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    let amount = Amount::new(amount)?;
+
+    let loan_account = AccountKey::new(
+        AccountCategory::Liability,
+        "USER",
+        user_id,
+        asset,
+        "LOAN",
+    );
+
+    let lending_pool = AccountKey::new(
+        AccountCategory::Asset,
+        "SYSTEM",
+        "LENDING_POOL",
+        asset,
+        "MAIN",
+    );
+
+    let entry = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Repay)
+        .correlation_id(correlation_id)
+        // Debit user's available balance (reduce funds)
+        .debit(AccountKey::user_available(user_id, asset), amount)
+        // Credit lending pool (return to system)
+        .credit(lending_pool, amount)
+        // Debit loan liability (reduce user's loan obligation)
+        .debit(loan_account, amount)
+        // Credit receivable (reduce system's receivable)
+        .credit(
+            AccountKey::new(AccountCategory::Asset, "SYSTEM", "LOANS_RECEIVABLE", asset, "MAIN"),
+            amount,
+        )
+        .metadata("repay_amount", json!(amount.to_string()))
+        .metadata("repay_asset", json!(asset))
+        .metadata("borrower", json!(user_id))
+        .build_unsigned()?;
+
+    validate_intent(&entry)?;
+
+    let committed = ctx.commit(entry).await?;
+
+    println!(
+        "✅ Repaid {} {} for {} (seq: {})",
+        amount, asset, user_id, committed.sequence
+    );
+    Ok(())
+}
+
+/// Place a limit order
+///
+/// Locks collateral and submits order to matching engine.
+pub async fn place_order(
+    ctx: &mut AppContext,
+    user_id: &str,
+    side: &str,
+    base: &str,
+    quote: &str,
+    price: Decimal,
+    quantity: Decimal,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    let order_side = match side.to_lowercase().as_str() {
+        "buy" => OrderSide::Buy,
+        "sell" => OrderSide::Sell,
+        _ => anyhow::bail!("Invalid order side: {}. Use 'buy' or 'sell'", side),
+    };
+
+    let pair = TradingPair::new(base, quote);
+
+    // Calculate lock amount based on side
+    let (lock_asset, lock_amount) = match order_side {
+        OrderSide::Buy => (quote.to_uppercase(), price * quantity), // Lock quote (USDT)
+        OrderSide::Sell => (base.to_uppercase(), quantity),          // Lock base (BTC)
+    };
+
+    let lock_amt = Amount::new(lock_amount)?;
+
+    // Create order (get order ID)
+    let order = Order::new(user_id, pair.clone(), order_side, price, quantity);
+    let order_id = order.id.clone();
+
+    // Create journal entry to lock collateral
+    let entry = JournalEntryBuilder::new()
+        .intent(TransactionIntent::OrderPlace)
+        .correlation_id(correlation_id)
+        // Debit from available balance
+        .debit(AccountKey::user_available(user_id, &lock_asset), lock_amt)
+        // Credit to locked balance
+        .credit(AccountKey::user_locked(user_id, &lock_asset), lock_amt)
+        .metadata("order_id", json!(order_id))
+        .metadata("order_side", json!(side.to_lowercase()))
+        .metadata("base_asset", json!(base.to_uppercase()))
+        .metadata("quote_asset", json!(quote.to_uppercase()))
+        .metadata("price", json!(price.to_string()))
+        .metadata("quantity", json!(quantity.to_string()))
+        .metadata("lock_asset", json!(lock_asset))
+        .metadata("lock_amount", json!(lock_amount.to_string()))
+        .build_unsigned()?;
+
+    validate_intent(&entry)?;
+
+    let committed = ctx.commit(entry).await?;
+
+    // TODO: Submit order to matching engine (ctx.matching_engine)
+    // For now, just print success
+
+    println!(
+        "✅ Order placed: {} {} {} @ {} {} (order_id: {}, seq: {})",
+        side.to_uppercase(),
+        quantity,
+        base.to_uppercase(),
+        price,
+        quote.to_uppercase(),
+        order_id,
+        committed.sequence
+    );
+    Ok(())
+}
+
+/// Cancel an open order
+pub async fn cancel_order(
+    ctx: &mut AppContext,
+    order_id: &str,
+    base: &str,
+    quote: &str,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    // For now, we need to know the lock details from the order
+    // In a real implementation, we'd look this up from the matching engine
+
+    // TODO: Look up order from matching engine
+    // let order = ctx.matching_engine.get_order(&pair, order_id)?;
+
+    // For demonstration, we'll require the user to provide unlock info
+    // In reality, this would be looked up from projection/matching engine
+
+    println!("⚠️  Order cancellation requires order lookup (not yet implemented)");
+    println!("   Order ID: {}", order_id);
+    println!("   Pair: {}/{}", base.to_uppercase(), quote.to_uppercase());
+
+    Ok(())
+}
+
+/// Show margin status for a user
+pub async fn margin_status(ctx: &AppContext, user_id: &str) -> Result<(), anyhow::Error> {
+    let state = ctx.risk.state();
+
+    println!("Margin Status for {}", user_id);
+    println!("{:-<50}", "");
+
+    // Show balances
+    println!("\n📊 Balances:");
+    for asset in ["USDT", "BTC", "ETH"] {
+        let available = state.get_balance(&AccountKey::user_available(user_id, asset));
+        let locked = state.get_balance(&AccountKey::user_locked(user_id, asset));
+
+        if !available.is_zero() || !locked.is_zero() {
+            println!(
+                "   {}: available={}, locked={}",
+                asset, available, locked
+            );
+        }
+    }
+
+    // Show loans
+    println!("\n💰 Loans:");
+    let mut has_loans = false;
+    for asset in ["USDT", "BTC", "ETH"] {
+        let loan_account = AccountKey::new(
+            AccountCategory::Liability,
+            "USER",
+            user_id,
+            asset,
+            "LOAN",
+        );
+        let loan = state.get_balance(&loan_account);
+
+        if !loan.is_zero() {
+            println!("   {}: {}", asset, loan);
+            has_loans = true;
+        }
+    }
+
+    if !has_loans {
+        println!("   No active loans");
+    }
+
+    // Show margin ratio (simplified)
+    let usdt_balance = state.get_balance(&AccountKey::user_available(user_id, "USDT"));
+    let usdt_loan = state.get_balance(&AccountKey::new(
+        AccountCategory::Liability,
+        "USER",
+        user_id,
+        "USDT",
+        "LOAN",
+    ));
+
+    if !usdt_loan.is_zero() {
+        let margin_ratio = (usdt_balance / usdt_loan) * Decimal::from(100);
+        println!("\n📈 Margin Ratio (USDT): {:.2}%", margin_ratio);
+
+        if margin_ratio < Decimal::from(120) {
+            println!("   ⚠️  WARNING: Below maintenance margin (120%)");
+        } else if margin_ratio < Decimal::from(150) {
+            println!("   ⚠️  CAUTION: Approaching maintenance margin");
+        } else {
+            println!("   ✅ Healthy margin level");
+        }
+    }
+
+    Ok(())
+}
+
+/// Show order book depth
+pub async fn order_book(
+    ctx: &AppContext,
+    base: &str,
+    quote: &str,
+    depth: usize,
+) -> Result<(), anyhow::Error> {
+    // TODO: Get from ctx.matching_engine when integrated
+    println!("Order Book: {}/{}", base.to_uppercase(), quote.to_uppercase());
+    println!("{:-<60}", "");
+    println!("(Order book not yet integrated with context)");
+    println!("\nTo see order book, matching engine needs to be integrated.");
 
     Ok(())
 }

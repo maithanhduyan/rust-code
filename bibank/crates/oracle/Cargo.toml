@@ -1,0 +1,19 @@
+[package]
+name = "bibank-oracle"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank Price Oracle - External price feeds for margin calculation"
+
+[dependencies]
+bibank-core = { path = "../core" }
+rust_decimal.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -5,8 +5,12 @@
 
 pub mod engine;
 pub mod error;
+pub mod interest;
+pub mod liquidation;
 pub mod state;
 
 pub use engine::RiskEngine;
 pub use error::RiskError;
-pub use state::RiskState;
+pub use interest::{InterestCalculator, DEFAULT_DAILY_RATE};
+pub use liquidation::{LiquidationConfig, LiquidationEngine, LiquidationResult};
+pub use state::{MarginError, RiskState, INITIAL_MARGIN, LIQUIDATION_THRESHOLD, MAINTENANCE_MARGIN, MAX_LEVERAGE};

@@ -19,6 +19,13 @@ pub fn validate_intent(entry: &UnsignedEntry) -> ValidationResult {
         TransactionIntent::Trade => validate_trade(entry),
         TransactionIntent::Fee => validate_fee(entry),
         TransactionIntent::Adjustment => validate_adjustment(entry),
+        // Phase 3: Margin Trading
+        TransactionIntent::Borrow => validate_borrow(entry),
+        TransactionIntent::Repay => validate_repay(entry),
+        TransactionIntent::Interest => validate_interest(entry),
+        TransactionIntent::Liquidation => validate_liquidation(entry),
+        TransactionIntent::OrderPlace => validate_order_place(entry),
+        TransactionIntent::OrderCancel => validate_order_cancel(entry),
     }
 }
 
@@ -172,6 +179,240 @@ fn validate_adjustment(_entry: &UnsignedEntry) -> ValidationResult {
     Ok(())
 }
 
+// === Phase 3: Margin Trading Validation ===
+
+/// Borrow: ASSET:LOAN ↑ (debit), LIAB:AVAILABLE ↑ (credit)
+/// User borrows funds - BiBank's receivable increases, User's balance increases
+fn validate_borrow(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 2 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Borrow",
+            account: String::new(),
+            reason: "Borrow requires at least 2 postings",
+        });
+    }
+
+    // Must have ASSET:*:*:LOAN debit (BiBank's receivable increases)
+    let has_loan_debit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Asset
+            && p.account.sub_account == "LOAN"
+            && p.side == Side::Debit
+    });
+
+    // Must have LIAB:*:*:AVAILABLE credit (User's balance increases)
+    let has_avail_credit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "AVAILABLE"
+            && p.side == Side::Credit
+    });
+
+    if !has_loan_debit || !has_avail_credit {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Borrow",
+            account: String::new(),
+            reason: "Borrow requires ASSET:*:LOAN debit and LIAB:*:AVAILABLE credit",
+        });
+    }
+
+    // All postings must be ASSET:LOAN or LIAB:AVAILABLE
+    for posting in &entry.postings {
+        let valid = match (&posting.account.category, posting.account.sub_account.as_str()) {
+            (AccountCategory::Asset, "LOAN") => true,
+            (AccountCategory::Liability, "AVAILABLE") => true,
+            _ => false,
+        };
+        if !valid {
+            return Err(LedgerError::InvalidIntentPosting {
+                intent: "Borrow",
+                account: posting.account.to_string(),
+                reason: "Borrow only allows ASSET:LOAN or LIAB:AVAILABLE accounts",
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Repay: LIAB:AVAILABLE ↓ (debit), ASSET:LOAN ↓ (credit)
+/// User repays loan - User's balance decreases, BiBank's receivable decreases
+fn validate_repay(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 2 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Repay",
+            account: String::new(),
+            reason: "Repay requires at least 2 postings",
+        });
+    }
+
+    // Must have LIAB:*:*:AVAILABLE debit (User pays)
+    let has_avail_debit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "AVAILABLE"
+            && p.side == Side::Debit
+    });
+
+    // Must have ASSET:*:*:LOAN credit (Loan decreases)
+    let has_loan_credit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Asset
+            && p.account.sub_account == "LOAN"
+            && p.side == Side::Credit
+    });
+
+    if !has_avail_debit || !has_loan_credit {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Repay",
+            account: String::new(),
+            reason: "Repay requires LIAB:*:AVAILABLE debit and ASSET:*:LOAN credit",
+        });
+    }
+
+    Ok(())
+}
+
+/// Interest: ASSET:LOAN ↑ (debit), REV:INTEREST ↑ (credit)
+/// Interest accrual - Loan increases, Revenue increases (compound interest)
+fn validate_interest(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 2 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Interest",
+            account: String::new(),
+            reason: "Interest requires at least 2 postings",
+        });
+    }
+
+    // Must have ASSET:*:*:LOAN debit (Loan principal increases)
+    let has_loan_debit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Asset
+            && p.account.sub_account == "LOAN"
+            && p.side == Side::Debit
+    });
+
+    // Must have REV:*:INTEREST:*:* credit (Revenue increases)
+    let has_rev_credit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Revenue && p.side == Side::Credit
+    });
+
+    if !has_loan_debit || !has_rev_credit {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Interest",
+            account: String::new(),
+            reason: "Interest requires ASSET:LOAN debit and REV credit",
+        });
+    }
+
+    Ok(())
+}
+
+/// Liquidation: Multiple accounts - close position, settle loan
+/// Complex validation - at least 4 postings (position close + settlement)
+fn validate_liquidation(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 4 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "Liquidation",
+            account: String::new(),
+            reason: "Liquidation requires at least 4 postings",
+        });
+    }
+
+    // Liquidation can involve LIAB (user balance), ASSET (loan), EQUITY (insurance)
+    // We don't restrict categories heavily for liquidation - it's a complex operation
+    Ok(())
+}
+
+/// OrderPlace: LIAB:AVAILABLE ↓, LIAB:LOCKED ↑
+/// Lock funds for order
+fn validate_order_place(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 2 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "OrderPlace",
+            account: String::new(),
+            reason: "OrderPlace requires at least 2 postings",
+        });
+    }
+
+    // Must have LIAB:*:*:AVAILABLE debit (funds leave available)
+    let has_avail_debit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "AVAILABLE"
+            && p.side == Side::Debit
+    });
+
+    // Must have LIAB:*:*:LOCKED credit (funds go to locked)
+    let has_locked_credit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "LOCKED"
+            && p.side == Side::Credit
+    });
+
+    if !has_avail_debit || !has_locked_credit {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "OrderPlace",
+            account: String::new(),
+            reason: "OrderPlace requires LIAB:AVAILABLE debit and LIAB:LOCKED credit",
+        });
+    }
+
+    // All postings must be LIAB
+    for posting in &entry.postings {
+        if posting.account.category != AccountCategory::Liability {
+            return Err(LedgerError::InvalidIntentPosting {
+                intent: "OrderPlace",
+                account: posting.account.to_string(),
+                reason: "OrderPlace only allows LIAB accounts",
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// OrderCancel: LIAB:LOCKED ↓, LIAB:AVAILABLE ↑
+/// Unlock funds from cancelled order
+fn validate_order_cancel(entry: &UnsignedEntry) -> ValidationResult {
+    if entry.postings.len() < 2 {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "OrderCancel",
+            account: String::new(),
+            reason: "OrderCancel requires at least 2 postings",
+        });
+    }
+
+    // Must have LIAB:*:*:LOCKED debit (funds leave locked)
+    let has_locked_debit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "LOCKED"
+            && p.side == Side::Debit
+    });
+
+    // Must have LIAB:*:*:AVAILABLE credit (funds return to available)
+    let has_avail_credit = entry.postings.iter().any(|p| {
+        p.account.category == AccountCategory::Liability
+            && p.account.sub_account == "AVAILABLE"
+            && p.side == Side::Credit
+    });
+
+    if !has_locked_debit || !has_avail_credit {
+        return Err(LedgerError::InvalidIntentPosting {
+            intent: "OrderCancel",
+            account: String::new(),
+            reason: "OrderCancel requires LIAB:LOCKED debit and LIAB:AVAILABLE credit",
+        });
+    }
+
+    // All postings must be LIAB
+    for posting in &entry.postings {
+        if posting.account.category != AccountCategory::Liability {
+            return Err(LedgerError::InvalidIntentPosting {
+                intent: "OrderCancel",
+                account: posting.account.to_string(),
+                reason: "OrderCancel only allows LIAB accounts",
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// Collect unique assets from postings
 fn collect_assets(postings: &[Posting]) -> std::collections::HashSet<String> {
     postings.iter().map(|p| p.account.asset.clone()).collect()
@@ -297,5 +538,281 @@ mod tests {
 
         let result = validate_fee(&entry);
         assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { .. })));
+    }
+
+    // === Phase 3: Borrow/Repay Tests ===
+
+    fn loan_account(user: &str, asset: &str) -> AccountKey {
+        AccountKey::new(AccountCategory::Asset, "USER", user, asset, "LOAN")
+    }
+
+    #[test]
+    fn test_validate_borrow_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Borrow,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // BiBank's receivable increases (ASSET:LOAN debit)
+                Posting::debit(loan_account("ALICE", "USDT"), amount(1000)),
+                // User's balance increases (LIAB:AVAILABLE credit)
+                Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_borrow(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_borrow_missing_loan() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Borrow,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Missing ASSET:LOAN account
+                Posting::debit(AccountKey::user_available("BOB", "USDT"), amount(1000)),
+                Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_borrow(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "Borrow", .. })));
+    }
+
+    #[test]
+    fn test_validate_borrow_wrong_account_type() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Borrow,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(loan_account("ALICE", "USDT"), amount(1000)),
+                Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+                // Not allowed: EQUITY account in Borrow
+                Posting::debit(AccountKey::new(AccountCategory::Equity, "SYSTEM", "INSURANCE", "USDT", "FUND"), amount(100)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_borrow(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "Borrow", .. })));
+    }
+
+    #[test]
+    fn test_validate_repay_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Repay,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // User's balance decreases (LIAB:AVAILABLE debit)
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(500)),
+                // BiBank's receivable decreases (ASSET:LOAN credit)
+                Posting::credit(loan_account("ALICE", "USDT"), amount(500)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_repay(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_repay_missing_loan_credit() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Repay,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Has LIAB debit but missing ASSET:LOAN credit
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(500)),
+                Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(500)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_repay(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "Repay", .. })));
+    }
+
+    // === Phase 3: Interest Tests ===
+
+    fn interest_revenue(asset: &str) -> AccountKey {
+        AccountKey::new(AccountCategory::Revenue, "SYSTEM", "INTEREST", asset, "INCOME")
+    }
+
+    #[test]
+    fn test_validate_interest_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Interest,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Loan increases (compound interest)
+                Posting::debit(loan_account("ALICE", "USDT"), amount(5)),
+                // Revenue increases
+                Posting::credit(interest_revenue("USDT"), amount(5)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_interest(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_interest_missing_revenue() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Interest,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(loan_account("ALICE", "USDT"), amount(5)),
+                // Wrong: No REV credit
+                Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(5)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_interest(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "Interest", .. })));
+    }
+
+    // === Phase 3: Liquidation Tests ===
+
+    #[test]
+    fn test_validate_liquidation_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Liquidation,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Close user's position - user loses BTC
+                Posting::debit(AccountKey::user_available("ALICE", "BTC"), amount(1)),
+                Posting::credit(AccountKey::system_vault("BTC"), amount(1)),
+                // Settle loan - loan cleared
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(500)),
+                Posting::credit(loan_account("ALICE", "USDT"), amount(500)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_liquidation(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_liquidation_insufficient_postings() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::Liquidation,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Only 2 postings - not enough for liquidation
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(500)),
+                Posting::credit(loan_account("ALICE", "USDT"), amount(500)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_liquidation(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "Liquidation", .. })));
+    }
+
+    // === Phase 3: OrderPlace/OrderCancel Tests ===
+
+    fn locked_account(user: &str, asset: &str) -> AccountKey {
+        AccountKey::user_locked(user, asset)
+    }
+
+    #[test]
+    fn test_validate_order_place_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::OrderPlace,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Funds leave AVAILABLE
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+                // Funds go to LOCKED
+                Posting::credit(locked_account("ALICE", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_order_place(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_order_place_missing_locked() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::OrderPlace,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Has AVAILABLE debit but no LOCKED credit
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+                Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_order_place(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "OrderPlace", .. })));
+    }
+
+    #[test]
+    fn test_validate_order_place_non_liab_account() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::OrderPlace,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+                Posting::credit(locked_account("ALICE", "USDT"), amount(1000)),
+                // Not allowed: ASSET account in OrderPlace
+                Posting::debit(AccountKey::system_vault("USDT"), amount(100)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_order_place(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "OrderPlace", .. })));
+    }
+
+    #[test]
+    fn test_validate_order_cancel_success() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::OrderCancel,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Funds leave LOCKED
+                Posting::debit(locked_account("ALICE", "USDT"), amount(1000)),
+                // Funds return to AVAILABLE
+                Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        assert!(validate_order_cancel(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_validate_order_cancel_missing_available_credit() {
+        let entry = UnsignedEntry {
+            intent: TransactionIntent::OrderCancel,
+            correlation_id: "test-1".to_string(),
+            causality_id: None,
+            postings: vec![
+                // Has LOCKED debit but wrong credit account
+                Posting::debit(locked_account("ALICE", "USDT"), amount(1000)),
+                Posting::credit(locked_account("BOB", "USDT"), amount(1000)),
+            ],
+            metadata: Default::default(),
+        };
+
+        let result = validate_order_cancel(&entry);
+        assert!(matches!(result, Err(LedgerError::InvalidIntentPosting { intent: "OrderCancel", .. })));
     }
 }
