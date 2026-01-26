@@ -36,4 +36,41 @@ pub enum LedgerError {
 
     #[error("Sequence must be strictly increasing: expected {expected}, got {actual}")]
     InvalidSequence { expected: u64, actual: u64 },
+
+    // === Phase 2: Intent-specific validation errors ===
+
+    #[error("Invalid {intent} posting on {account}: {reason}")]
+    InvalidIntentPosting {
+        intent: &'static str,
+        account: String,
+        reason: &'static str,
+    },
+
+    #[error("Trade requires {expected} postings, got {actual}: {reason}")]
+    InvalidTradePostings {
+        expected: usize,
+        actual: usize,
+        reason: &'static str,
+    },
+
+    #[error("Trade requires exactly {expected} assets, got {actual}: {assets:?}")]
+    InvalidTradeAssets {
+        expected: usize,
+        actual: usize,
+        assets: Vec<String>,
+    },
+
+    // === Phase 2: Signature errors ===
+
+    #[error("Missing system signature")]
+    MissingSystemSignature,
+
+    #[error("Invalid signature from {signer}: {reason}")]
+    InvalidSignature {
+        signer: String,
+        reason: String,
+    },
+
+    #[error("Signature verification failed: {0}")]
+    SignatureVerificationFailed(String),
 }

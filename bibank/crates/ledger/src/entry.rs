@@ -2,6 +2,7 @@
 
 use crate::account::AccountKey;
 use crate::error::LedgerError;
+use crate::signature::EntrySignature;
 use bibank_core::Amount;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -128,6 +129,11 @@ pub struct JournalEntry {
     /// Additional metadata (opaque to ledger, used by audit/projection)
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+
+    // === Digital Signatures (Phase 2) ===
+    /// Signatures from system and/or operators
+    #[serde(default)]
+    pub signatures: Vec<EntrySignature>,
 }
 
 impl JournalEntry {
@@ -336,6 +342,7 @@ mod tests {
                 ),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         assert!(entry.validate().is_ok());
@@ -356,6 +363,7 @@ mod tests {
                 Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount(50)),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         let result = entry.validate();
@@ -381,6 +389,7 @@ mod tests {
                 Posting::credit(AccountKey::user_available("ALICE", "BTC"), amount(1)),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         assert!(entry.validate().is_ok());
@@ -411,6 +420,7 @@ mod tests {
                 ),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         assert!(matches!(

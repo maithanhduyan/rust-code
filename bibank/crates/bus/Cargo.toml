@@ -4,12 +4,18 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "BiBank event bus - In-process event distribution"
+description = "BiBank event bus - In-process async event distribution"
 
 [dependencies]
 bibank-events.workspace = true
+bibank-ledger.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+tempfile.workspace = true

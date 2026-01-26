@@ -1,8 +1,9 @@
 //! CLI commands
 
 use bibank_core::Amount;
-use bibank_ledger::{AccountCategory, AccountKey, JournalEntryBuilder, TransactionIntent};
+use bibank_ledger::{AccountCategory, AccountKey, JournalEntryBuilder, TransactionIntent, validate_intent};
 use rust_decimal::Decimal;
+use serde_json::json;
 
 use crate::context::AppContext;
 
@@ -125,6 +126,128 @@ pub async fn balance(ctx: &AppContext, user_id: &str) -> Result<(), anyhow::Erro
             println!("              {} {}", bal, asset);
         }
     }
+
+    Ok(())
+}
+
+// === Phase 2: Trade and Fee commands ===
+
+/// Execute a trade between two users
+///
+/// Alice sells `sell_amount` of `sell_asset` and buys `buy_amount` of `buy_asset` from Bob.
+pub async fn trade(
+    ctx: &mut AppContext,
+    maker: &str,        // Alice - the one selling
+    taker: &str,        // Bob - the one buying
+    sell_amount: Decimal,
+    sell_asset: &str,
+    buy_amount: Decimal,
+    buy_asset: &str,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    let sell_amt = Amount::new(sell_amount)?;
+    let buy_amt = Amount::new(buy_amount)?;
+
+    // Calculate price for metadata
+    let price = sell_amount / buy_amount;
+
+    let entry = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Trade)
+        .correlation_id(correlation_id)
+        // Sell leg: Maker pays sell_asset, Taker receives
+        .debit(AccountKey::user_available(maker, sell_asset), sell_amt)
+        .credit(AccountKey::user_available(taker, sell_asset), sell_amt)
+        // Buy leg: Taker pays buy_asset, Maker receives
+        .debit(AccountKey::user_available(taker, buy_asset), buy_amt)
+        .credit(AccountKey::user_available(maker, buy_asset), buy_amt)
+        // Metadata
+        .metadata("trade_id", json!(correlation_id))
+        .metadata("base_asset", json!(buy_asset))
+        .metadata("quote_asset", json!(sell_asset))
+        .metadata("price", json!(price.to_string()))
+        .metadata("base_amount", json!(buy_amount.to_string()))
+        .metadata("quote_amount", json!(sell_amount.to_string()))
+        .metadata("maker", json!(maker))
+        .metadata("taker", json!(taker))
+        .build_unsigned()?;
+
+    // Validate trade-specific rules
+    validate_intent(&entry)?;
+
+    let committed = ctx.commit(entry).await?;
+
+    println!(
+        "✅ Trade executed: {} sells {} {} for {} {} from {} (seq: {})",
+        maker, sell_amount, sell_asset, buy_amount, buy_asset, taker, committed.sequence
+    );
+    Ok(())
+}
+
+/// Charge a fee from a user
+pub async fn fee(
+    ctx: &mut AppContext,
+    user_id: &str,
+    amount: Decimal,
+    asset: &str,
+    fee_type: &str,  // "trading", "withdrawal", etc.
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    let amount = Amount::new(amount)?;
+
+    // Fee account: REV:SYSTEM:FEE:<ASSET>:<FEE_TYPE>
+    let fee_account = AccountKey::new(
+        AccountCategory::Revenue,
+        "SYSTEM",
+        "FEE",
+        asset,
+        fee_type.to_uppercase(),
+    );
+
+    let entry = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Fee)
+        .correlation_id(correlation_id)
+        .debit(AccountKey::user_available(user_id, asset), amount)
+        .credit(fee_account, amount)
+        .metadata("fee_amount", json!(amount.to_string()))
+        .metadata("fee_asset", json!(asset))
+        .metadata("fee_type", json!(fee_type))
+        .build_unsigned()?;
+
+    // Validate fee-specific rules
+    validate_intent(&entry)?;
+
+    let committed = ctx.commit(entry).await?;
+
+    println!(
+        "✅ Fee charged: {} {} {} from {} (seq: {})",
+        amount, asset, fee_type, user_id, committed.sequence
+    );
+    Ok(())
+}
+
+/// Execute a trade with fee (atomic: Trade + Fee entries)
+pub async fn trade_with_fee(
+    ctx: &mut AppContext,
+    maker: &str,
+    taker: &str,
+    sell_amount: Decimal,
+    sell_asset: &str,
+    buy_amount: Decimal,
+    buy_asset: &str,
+    fee_amount: Decimal,
+    correlation_id: &str,
+) -> Result<(), anyhow::Error> {
+    // First execute the trade
+    trade(
+        ctx, maker, taker,
+        sell_amount, sell_asset,
+        buy_amount, buy_asset,
+        correlation_id,
+    ).await?;
+
+    // Then charge the fee (separate entry, atomic in business sense)
+    let fee_correlation = format!("{}-fee", correlation_id);
+    fee(ctx, maker, fee_amount, sell_asset, "trading", &fee_correlation).await?;
 
     Ok(())
 }

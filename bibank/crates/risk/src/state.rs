@@ -136,6 +136,7 @@ mod tests {
                 Posting::credit(AccountKey::user_available(user, "USDT"), amount(val)),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         }
     }
 
@@ -171,6 +172,7 @@ mod tests {
                 Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(150)),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         let violations = state.check_sufficient_balance(&transfer);
@@ -199,9 +201,97 @@ mod tests {
                 Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(50)),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
 
         let violations = state.check_sufficient_balance(&transfer);
         assert!(violations.is_empty());
+    }
+
+    // === Phase 2: Trade tests ===
+
+    fn deposit_btc_entry(user: &str, val: i64) -> JournalEntry {
+        JournalEntry {
+            sequence: 1,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Deposit,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(AccountKey::system_vault("BTC"), amount(val)),
+                Posting::credit(AccountKey::user_available(user, "BTC"), amount(val)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_trade_balance_check_both_users() {
+        let mut state = RiskState::new();
+
+        // Alice deposits 100 USDT
+        state.apply_entry(&deposit_entry("ALICE", 100));
+        // Bob deposits 1 BTC
+        state.apply_entry(&deposit_btc_entry("BOB", 1));
+
+        // Trade: Alice sells 100 USDT for 1 BTC
+        let trade = JournalEntry {
+            sequence: 3,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Trade,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                // USDT leg
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(100)),
+                Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(100)),
+                // BTC leg
+                Posting::debit(AccountKey::user_available("BOB", "BTC"), amount(1)),
+                Posting::credit(AccountKey::user_available("ALICE", "BTC"), amount(1)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        };
+
+        let violations = state.check_sufficient_balance(&trade);
+        assert!(violations.is_empty(), "Valid trade should pass risk check");
+    }
+
+    #[test]
+    fn test_trade_insufficient_balance_seller() {
+        let mut state = RiskState::new();
+
+        // Alice only has 50 USDT
+        state.apply_entry(&deposit_entry("ALICE", 50));
+        // Bob deposits 1 BTC
+        state.apply_entry(&deposit_btc_entry("BOB", 1));
+
+        // Trade: Alice tries to sell 100 USDT (insufficient)
+        let trade = JournalEntry {
+            sequence: 3,
+            prev_hash: "test".to_string(),
+            hash: "test".to_string(),
+            timestamp: Utc::now(),
+            intent: TransactionIntent::Trade,
+            correlation_id: "test".to_string(),
+            causality_id: None,
+            postings: vec![
+                Posting::debit(AccountKey::user_available("ALICE", "USDT"), amount(100)),
+                Posting::credit(AccountKey::user_available("BOB", "USDT"), amount(100)),
+                Posting::debit(AccountKey::user_available("BOB", "BTC"), amount(1)),
+                Posting::credit(AccountKey::user_available("ALICE", "BTC"), amount(1)),
+            ],
+            metadata: HashMap::new(),
+            signatures: Vec::new(),
+        };
+
+        let violations = state.check_sufficient_balance(&trade);
+        assert!(!violations.is_empty(), "Trade should fail - Alice has insufficient USDT");
+        assert!(violations.iter().any(|(acc, _)| acc.contains("ALICE")));
     }
 }

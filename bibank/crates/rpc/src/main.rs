@@ -78,7 +78,62 @@ enum Commands {
     },
 
     /// Audit the ledger (verify hash chain)
-    Audit,
+    Audit {
+        /// Also verify digital signatures
+        #[arg(long)]
+        verify_signatures: bool,
+    },
+
+    // === Phase 2: Trade and Fee ===
+
+    /// Execute a trade between two users
+    Trade {
+        /// Maker user ID (seller)
+        maker: String,
+        /// Taker user ID (buyer)
+        taker: String,
+        /// Amount to sell
+        #[arg(long)]
+        sell: Decimal,
+        /// Asset to sell
+        #[arg(long)]
+        sell_asset: String,
+        /// Amount to buy
+        #[arg(long)]
+        buy: Decimal,
+        /// Asset to buy
+        #[arg(long)]
+        buy_asset: String,
+        /// Optional fee amount (charged to maker)
+        #[arg(long)]
+        fee: Option<Decimal>,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Charge a fee from a user
+    Fee {
+        /// User ID
+        user: String,
+        /// Fee amount
+        amount: Decimal,
+        /// Asset/currency code
+        asset: String,
+        /// Fee type (trading, withdrawal, etc.)
+        #[arg(long, default_value = "trading")]
+        fee_type: String,
+        /// Optional correlation ID
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Generate a new system key
+    Keygen {
+        /// Output file path
+        #[arg(long, default_value = "system.key")]
+        output: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -155,21 +210,101 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
-        Commands::Audit => {
+        Commands::Audit { verify_signatures } => {
             use bibank_events::EventReader;
             use bibank_ledger::hash::verify_chain;
 
             let reader = EventReader::from_directory(ctx.journal_path())?;
             let entries = reader.read_all()?;
 
+            // Verify hash chain
             match verify_chain(&entries) {
                 Ok(()) => {
                     println!("✅ Hash chain verified ({} entries)", entries.len());
                 }
                 Err(e) => {
                     println!("❌ Hash chain broken: {}", e);
+                    return Ok(());
                 }
             }
+
+            // Verify signatures if requested
+            if verify_signatures {
+                let mut signed_count = 0;
+                let mut unsigned_count = 0;
+
+                for entry in &entries {
+                    if entry.signatures.is_empty() {
+                        unsigned_count += 1;
+                    } else {
+                        match entry.verify_signatures() {
+                            Ok(()) => signed_count += 1,
+                            Err(e) => {
+                                println!("❌ Signature verification failed at seq {}: {}", entry.sequence, e);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
+                println!("✅ Signatures verified: {} signed, {} unsigned (Phase 1)", signed_count, unsigned_count);
+            }
+        }
+
+        Commands::Trade {
+            maker,
+            taker,
+            sell,
+            sell_asset,
+            buy,
+            buy_asset,
+            fee,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+
+            if let Some(fee_amount) = fee {
+                commands::trade_with_fee(
+                    &mut ctx, &maker, &taker,
+                    sell, &sell_asset,
+                    buy, &buy_asset,
+                    fee_amount,
+                    &correlation_id,
+                ).await?;
+            } else {
+                commands::trade(
+                    &mut ctx, &maker, &taker,
+                    sell, &sell_asset,
+                    buy, &buy_asset,
+                    &correlation_id,
+                ).await?;
+            }
+        }
+
+        Commands::Fee {
+            user,
+            amount,
+            asset,
+            fee_type,
+            correlation_id,
+        } => {
+            let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            commands::fee(&mut ctx, &user, amount, &asset, &fee_type, &correlation_id).await?;
+        }
+
+        Commands::Keygen { output } => {
+            use bibank_ledger::{Signer, SystemSigner};
+
+            let signer = SystemSigner::generate();
+            let seed = signer.seed_hex();
+            let pubkey = signer.public_key_hex();
+
+            std::fs::write(&output, &seed)?;
+            println!("✅ Generated system key");
+            println!("   Private key saved to: {}", output.display());
+            println!("   Public key: {}", pubkey);
+            println!("");
+            println!("To use: export BIBANK_SYSTEM_KEY={}", seed);
         }
     }
 

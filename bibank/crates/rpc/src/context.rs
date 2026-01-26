@@ -2,11 +2,12 @@
 
 use bibank_bus::EventBus;
 use bibank_events::{EventReader, EventStore};
-use bibank_ledger::{hash::calculate_entry_hash, JournalEntry, UnsignedEntry};
+use bibank_ledger::{hash::calculate_entry_hash, JournalEntry, Signer, SystemSigner, UnsignedEntry};
 use bibank_projection::ProjectionEngine;
 use bibank_risk::{RiskEngine, RiskError};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Application context - wires together all components
 pub struct AppContext {
@@ -14,6 +15,7 @@ pub struct AppContext {
     pub event_store: EventStore,
     pub bus: EventBus,
     pub projection: Option<ProjectionEngine>,
+    pub signer: Option<Arc<dyn Signer>>,
     journal_path: PathBuf,
     projection_path: PathBuf,
     last_sequence: u64,
@@ -56,11 +58,18 @@ impl AppContext {
             proj.replay(&bus).await.ok();
         }
 
+        // Initialize system signer from env var (Phase 2)
+        let signer: Option<Arc<dyn Signer>> = std::env::var("BIBANK_SYSTEM_KEY")
+            .ok()
+            .and_then(|key| SystemSigner::from_hex(&key).ok())
+            .map(|s| Arc::new(s) as Arc<dyn Signer>);
+
         Ok(Self {
             risk,
             event_store,
             bus,
             projection,
+            signer,
             journal_path,
             projection_path,
             last_sequence,
@@ -93,27 +102,34 @@ impl AppContext {
             causality_id: unsigned.causality_id,
             postings: unsigned.postings,
             metadata: unsigned.metadata,
+            signatures: Vec::new(), // Phase 2: Will be signed after hash calculation
         };
 
         entry.hash = calculate_entry_hash(&entry);
 
-        // 4. Validate the signed entry
+        // 4. Sign the entry with system key (Phase 2)
+        if let Some(ref signer) = self.signer {
+            let signature = signer.sign(&entry);
+            entry.signatures.push(signature);
+        }
+
+        // 5. Validate the signed entry
         entry.validate().map_err(CommitError::Ledger)?;
 
-        // 5. Append to event store (Source of Truth)
+        // 6. Append to event store (Source of Truth)
         self.event_store
             .append(&entry)
             .map_err(CommitError::Event)?;
 
-        // 6. Update risk state
+        // 7. Update risk state
         self.risk.apply(&entry);
 
-        // 7. Update projection (if available)
+        // 8. Update projection (if available)
         if let Some(ref projection) = self.projection {
             projection.apply(&entry).await.ok();
         }
 
-        // 8. Update last sequence/hash
+        // 9. Update last sequence/hash
         self.last_sequence = entry.sequence;
         self.last_hash = entry.hash.clone();
 

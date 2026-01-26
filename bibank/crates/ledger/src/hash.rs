@@ -161,6 +161,7 @@ mod tests {
                 Posting::credit(AccountKey::user_available("ALICE", "USDT"), amount),
             ],
             metadata: HashMap::new(),
+            signatures: Vec::new(),
         };
         entry.hash = calculate_entry_hash(&entry);
         entry

@@ -332,3 +332,296 @@ async fn test_multi_asset_balanced() {
     assert_eq!(alice_usdt, Decimal::new(1000, 0));
     assert_eq!(bob_btc, Decimal::new(10, 0));
 }
+
+// =============================================================================
+// Phase 2 Integration Tests
+// =============================================================================
+
+/// Test: Trade between two users (multi-asset atomic swap)
+#[tokio::test]
+async fn test_trade_multi_asset_swap() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Deposit USDT to Alice
+    let deposit_usdt = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-usdt")
+        .debit(AccountKey::system_vault("USDT"), amount(100))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_usdt).await.unwrap();
+
+    // Deposit BTC to Bob
+    let deposit_btc = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-btc")
+        .debit(AccountKey::system_vault("BTC"), amount(1))
+        .credit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_btc).await.unwrap();
+
+    // Trade: Alice sells 100 USDT for 1 BTC from Bob
+    let trade = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Trade)
+        .correlation_id("trade-1")
+        // USDT leg: Alice pays, Bob receives
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .credit(AccountKey::user_available("BOB", "USDT"), amount(100))
+        // BTC leg: Bob pays, Alice receives
+        .debit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .credit(AccountKey::user_available("ALICE", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+
+    ctx.commit(trade).await.unwrap();
+
+    // Verify final balances
+    let alice_usdt = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "USDT"));
+    let alice_btc = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "BTC"));
+    let bob_usdt = ctx.risk.state().get_balance(&AccountKey::user_available("BOB", "USDT"));
+    let bob_btc = ctx.risk.state().get_balance(&AccountKey::user_available("BOB", "BTC"));
+
+    assert_eq!(alice_usdt, Decimal::ZERO);  // Sold all USDT
+    assert_eq!(alice_btc, Decimal::new(1, 0));  // Got 1 BTC
+    assert_eq!(bob_usdt, Decimal::new(100, 0));  // Got 100 USDT
+    assert_eq!(bob_btc, Decimal::ZERO);  // Sold all BTC
+}
+
+/// Test: Fee collection
+#[tokio::test]
+async fn test_fee_collection() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Deposit to Alice
+    let deposit = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-1")
+        .debit(AccountKey::system_vault("USDT"), amount(100))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit).await.unwrap();
+
+    // Charge fee
+    let fee = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Fee)
+        .correlation_id("fee-1")
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(1))
+        .credit(AccountKey::fee_revenue("USDT"), amount(1))
+        .build_unsigned()
+        .unwrap();
+
+    ctx.commit(fee).await.unwrap();
+
+    // Verify balances
+    let alice_balance = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "USDT"));
+    let fee_revenue = ctx.risk.state().get_balance(&AccountKey::fee_revenue("USDT"));
+
+    assert_eq!(alice_balance, Decimal::new(99, 0));
+    assert_eq!(fee_revenue, Decimal::new(1, 0));
+}
+
+/// Test: Trade + Fee (atomic flow)
+#[tokio::test]
+async fn test_trade_with_fee() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Deposit USDT to Alice (extra for fee)
+    let deposit_usdt = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-usdt")
+        .debit(AccountKey::system_vault("USDT"), amount(101))  // 100 for trade + 1 for fee
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(101))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_usdt).await.unwrap();
+
+    // Deposit BTC to Bob
+    let deposit_btc = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-btc")
+        .debit(AccountKey::system_vault("BTC"), amount(1))
+        .credit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_btc).await.unwrap();
+
+    // Trade
+    let trade = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Trade)
+        .correlation_id("trade-1")
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .credit(AccountKey::user_available("BOB", "USDT"), amount(100))
+        .debit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .credit(AccountKey::user_available("ALICE", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(trade).await.unwrap();
+
+    // Fee (separate entry)
+    let fee = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Fee)
+        .correlation_id("fee-1")
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(1))
+        .credit(AccountKey::fee_revenue("USDT"), amount(1))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(fee).await.unwrap();
+
+    // Verify
+    let alice_usdt = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "USDT"));
+    let fee_revenue = ctx.risk.state().get_balance(&AccountKey::fee_revenue("USDT"));
+
+    assert_eq!(alice_usdt, Decimal::ZERO);  // 101 - 100 (trade) - 1 (fee) = 0
+    assert_eq!(fee_revenue, Decimal::new(1, 0));
+}
+
+/// Test: Digital signatures
+#[tokio::test]
+async fn test_digital_signatures() {
+    use bibank_ledger::SystemSigner;
+
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    // Set up signer via env var
+    let signer = SystemSigner::generate();
+    std::env::set_var("BIBANK_SYSTEM_KEY", signer.seed_hex());
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+
+    let entry = ctx.commit(genesis).await.unwrap();
+
+    // Entry should have a signature
+    assert!(entry.has_system_signature());
+    assert_eq!(entry.signatures.len(), 1);
+    assert_eq!(entry.signatures[0].signer_id, "SYSTEM");
+
+    // Signature should verify
+    assert!(entry.verify_signatures().is_ok());
+
+    // Clean up env var
+    std::env::remove_var("BIBANK_SYSTEM_KEY");
+}
+
+/// Test: Trade risk check blocks insufficient balance
+#[tokio::test]
+async fn test_trade_risk_blocks_insufficient() {
+    let temp_dir = TempDir::new().unwrap();
+    let data_path = temp_dir.path();
+
+    let mut ctx = AppContext::new(data_path).await.unwrap();
+
+    // Genesis
+    let genesis = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Genesis)
+        .correlation_id("genesis-1")
+        .debit(AccountKey::system_vault("USDT"), amount(1_000_000))
+        .credit(
+            AccountKey::new(AccountCategory::Equity, "SYSTEM", "CAPITAL", "USDT", "MAIN"),
+            amount(1_000_000),
+        )
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(genesis).await.unwrap();
+
+    // Deposit only 50 USDT to Alice (not enough for 100 trade)
+    let deposit_usdt = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-usdt")
+        .debit(AccountKey::system_vault("USDT"), amount(50))
+        .credit(AccountKey::user_available("ALICE", "USDT"), amount(50))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_usdt).await.unwrap();
+
+    // Deposit BTC to Bob
+    let deposit_btc = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Deposit)
+        .correlation_id("deposit-btc")
+        .debit(AccountKey::system_vault("BTC"), amount(1))
+        .credit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+    ctx.commit(deposit_btc).await.unwrap();
+
+    // Trade should fail - Alice doesn't have 100 USDT
+    let trade = JournalEntryBuilder::new()
+        .intent(TransactionIntent::Trade)
+        .correlation_id("trade-1")
+        .debit(AccountKey::user_available("ALICE", "USDT"), amount(100))
+        .credit(AccountKey::user_available("BOB", "USDT"), amount(100))
+        .debit(AccountKey::user_available("BOB", "BTC"), amount(1))
+        .credit(AccountKey::user_available("ALICE", "BTC"), amount(1))
+        .build_unsigned()
+        .unwrap();
+
+    let result = ctx.commit(trade).await;
+    assert!(result.is_err(), "Trade should fail due to insufficient USDT");
+
+    // Balances should be unchanged
+    let alice_usdt = ctx.risk.state().get_balance(&AccountKey::user_available("ALICE", "USDT"));
+    assert_eq!(alice_usdt, Decimal::new(50, 0));
+}

@@ -45,6 +45,7 @@ impl RiskEngine {
             causality_id: entry.causality_id.clone(),
             postings: entry.postings.clone(),
             metadata: entry.metadata.clone(),
+            signatures: Vec::new(),
         };
 
         self.check_entry(&temp_entry)

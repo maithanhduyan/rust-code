@@ -12,7 +12,11 @@ pub mod account;
 pub mod entry;
 pub mod error;
 pub mod hash;
+pub mod signature;
+pub mod validation;
 
 pub use account::{AccountCategory, AccountKey};
 pub use entry::{JournalEntry, JournalEntryBuilder, Posting, Side, TransactionIntent, UnsignedEntry};
 pub use error::LedgerError;
+pub use signature::{EntrySignature, SignatureAlgorithm, SignablePayload, Signer, SystemSigner};
+pub use validation::validate_intent;

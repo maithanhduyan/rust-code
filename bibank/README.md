@@ -1,7 +1,7 @@
 # BiBank - Financial State OS
 
-> **Status:** Phase 1 Complete ✅
-> **Version:** 0.1.0
+> **Status:** Phase 2 Complete ✅
+> **Version:** 0.2.0
 
 **BiBank** là một **Financial State OS** - không phải app ngân hàng truyền thống.
 
@@ -86,6 +86,37 @@ cargo build --release
 
 ```bash
 ./target/release/bibank replay --reset
+```
+
+## Phase 2: Trade, Fee, Signatures
+
+### Trade (Multi-asset atomic swap)
+
+```bash
+# Alice sells 100 USDT for 1 BTC from Bob
+./target/release/bibank trade ALICE BOB --sell 100 --sell-asset USDT --buy 1 --buy-asset BTC
+
+# Trade with fee
+./target/release/bibank trade ALICE BOB --sell 100 --sell-asset USDT --buy 1 --buy-asset BTC --fee 0.1
+```
+
+### Fee
+
+```bash
+./target/release/bibank fee ALICE 0.1 USDT --fee-type trading
+```
+
+### Generate System Key (for digital signatures)
+
+```bash
+./target/release/bibank keygen --output system.key
+# Then: export BIBANK_SYSTEM_KEY=<hex-seed>
+```
+
+### Audit with Signature Verification
+
+```bash
+./target/release/bibank audit --verify-signatures
 ```
 
 ## Account Key Format
@@ -182,6 +213,11 @@ cargo test -p bibank-rpc --test integration
 | `test_replay_rebuilds_state` | Restart rebuilds correct state |
 | `test_double_entry_validation` | Unbalanced entries rejected |
 | `test_multi_asset_balanced` | Multi-asset support |
+| `test_trade_multi_asset_swap` | Trade between two users (Phase 2) |
+| `test_fee_collection` | Fee charged to user (Phase 2) |
+| `test_trade_with_fee` | Trade + Fee atomic flow (Phase 2) |
+| `test_digital_signatures` | Entry signing with Ed25519 (Phase 2) |
+| `test_trade_risk_blocks_insufficient` | Trade risk check (Phase 2) |
 
 ## Phase 1 Success Criteria
 
@@ -191,17 +227,26 @@ cargo test -p bibank-rpc --test integration
 - [x] Hash chain is verified on replay
 - [x] Sequence is derived from JSONL, no gaps after restart
 
-## Phase 2+ Roadmap
+## Phase 2 Success Criteria
+
+- [x] Trade command creates valid 4+ posting entry
+- [x] Fee command deducts from user, credits to REV
+- [x] Event bus delivers events to all subscribers
+- [x] Subscriber failure doesn't block ledger commit
+- [x] All entries are signed with system key (when BIBANK_SYSTEM_KEY is set)
+- [x] `audit --verify-signatures` passes
+- [x] Replay rebuilds state identically
+- [x] 51+ tests passing
+
+## Phase 3+ Roadmap
 
 | Feature | Phase |
 |---------|-------|
-| Trade intent (multi-asset swap) | Phase 2 |
-| Fee intent | Phase 2 |
-| Event Bus (pub/sub) | Phase 2 |
-| Digital signatures | Phase 2 |
-| Margin/Exposure checks | Phase 3 |
-| Liquidation | Phase 3 |
-| AML hooks | Phase 4 |
+| Order matching engine | Phase 3 |
+| Margin/leverage | Phase 3 |
+| Liquidation engine | Phase 3 |
+| Multi-signature approval | Phase 3 |
+| AML real-time hooks | Phase 4 |
 | Rule DSL | Phase 4 |
 
 ## License
