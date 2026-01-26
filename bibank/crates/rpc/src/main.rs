@@ -133,18 +133,25 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Replay { reset } => {
+            let projection_path = ctx.projection_path().to_path_buf();
+            let data_path = cli.data.clone();
+
+            // Drop existing context to release SQLite connection
+            drop(ctx);
+
             if reset {
                 println!("🗑️  Dropping projections...");
-                if ctx.projection_path().exists() {
-                    std::fs::remove_file(ctx.projection_path())?;
+                if projection_path.exists() {
+                    std::fs::remove_file(&projection_path)?;
+                    println!("   Deleted {}", projection_path.display());
                 }
             }
 
             // Recreate context to replay
-            let ctx = AppContext::new(&cli.data).await?;
+            let new_ctx = AppContext::new(&data_path).await?;
             println!(
                 "✅ Replayed {} entries",
-                ctx.last_sequence()
+                new_ctx.last_sequence()
             );
         }
 

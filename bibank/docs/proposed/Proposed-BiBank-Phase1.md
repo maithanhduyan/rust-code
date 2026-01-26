@@ -497,11 +497,11 @@ fn verify_chain(entries: &[JournalEntry]) -> Result<()> {
 
 ### 10.3 Success Criteria (Phase 1 Complete)
 
-- [ ] `bibank replay --reset` drops projection DB, replays all events, state is identical
-- [ ] Double-entry validation rejects unbalanced entries at compile/runtime
-- [ ] Risk engine rejects withdrawal when balance < amount
-- [ ] Hash chain is verified on replay
-- [ ] Sequence is derived from JSONL, no gaps after restart
+- [x] `bibank replay --reset` drops projection DB, replays all events, state is identical
+- [x] Double-entry validation rejects unbalanced entries at compile/runtime
+- [x] Risk engine rejects withdrawal when balance < amount
+- [x] Hash chain is verified on replay
+- [x] Sequence is derived from JSONL, no gaps after restart
 
 ---
 

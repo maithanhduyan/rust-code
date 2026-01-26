@@ -256,13 +256,18 @@ impl JournalEntryBuilder {
             return Err(LedgerError::InsufficientPostings);
         }
 
-        Ok(UnsignedEntry {
+        let unsigned = UnsignedEntry {
             intent,
             correlation_id,
             causality_id: self.causality_id,
             postings: self.postings,
             metadata: self.metadata,
-        })
+        };
+
+        // Validate double-entry balance before returning
+        unsigned.validate_balance()?;
+
+        Ok(unsigned)
     }
 }
 
