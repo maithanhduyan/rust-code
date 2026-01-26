@@ -1,7 +1,7 @@
 # BiBank - Financial State OS
 
-> **Status:** Phase 2 Complete ✅
-> **Version:** 0.2.0
+> **Status:** Phase 2.1 Complete ✅
+> **Version:** 0.2.1
 
 **BiBank** là một **Financial State OS** - không phải app ngân hàng truyền thống.
 
@@ -29,12 +29,12 @@ Client ──▶ Ledger ──▶ Event Bus ──▶ Projections
 
 | Crate | Mô tả |
 |-------|-------|
-| `bibank-core` | Domain types (Amount) |
+| `bibank-core` | Domain types (Amount, Currency) |
 | `bibank-ledger` | Double-entry core (AccountKey, JournalEntry, hash chain) |
 | `bibank-risk` | Pre-commit gatekeeper (balance checks) |
 | `bibank-events` | JSONL append-only store |
 | `bibank-bus` | Event distribution |
-| `bibank-projection` | SQLite read models |
+| `bibank-projection` | SQLite read models (Balance, Trade history) |
 | `bibank-rpc` | CLI orchestrator |
 | `bibank-dsl` | Future DSL macros |
 
@@ -117,6 +117,24 @@ cargo build --release
 
 ```bash
 ./target/release/bibank audit --verify-signatures
+```
+
+## Phase 2.1: Trade History & Currency
+
+### Trade History
+
+```bash
+# List all recent trades
+./target/release/bibank trades
+
+# Filter by user
+./target/release/bibank trades --user ALICE
+
+# Filter by trading pair
+./target/release/bibank trades --base BTC --quote USDT
+
+# Limit results
+./target/release/bibank trades --limit 10
 ```
 
 ## Account Key Format
@@ -237,6 +255,15 @@ cargo test -p bibank-rpc --test integration
 - [x] `audit --verify-signatures` passes
 - [x] Replay rebuilds state identically
 - [x] 51+ tests passing
+
+## Phase 2.1 Success Criteria
+
+- [x] Currency enum with common crypto/fiat currencies
+- [x] Trade projection stores trade history in SQLite
+- [x] `trades` command shows trade history
+- [x] Filter by user: `--user ALICE`
+- [x] Filter by pair: `--base BTC --quote USDT`
+- [x] 63+ tests passing
 
 ## Phase 3+ Roadmap
 

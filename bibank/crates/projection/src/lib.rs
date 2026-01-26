@@ -5,7 +5,9 @@
 pub mod balance;
 pub mod engine;
 pub mod error;
+pub mod trade;
 
 pub use balance::BalanceProjection;
 pub use engine::ProjectionEngine;
 pub use error::ProjectionError;
+pub use trade::{TradeProjection, TradeRecord};

@@ -251,3 +251,53 @@ pub async fn trade_with_fee(
 
     Ok(())
 }
+
+// === Phase 2.1: Trade History ===
+
+/// List trade history
+pub async fn trades(
+    ctx: &AppContext,
+    user: Option<&str>,
+    pair: Option<(&str, &str)>,
+    limit: u32,
+) -> Result<(), anyhow::Error> {
+    let Some(ref projection) = ctx.projection else {
+        anyhow::bail!("Projection not available");
+    };
+
+    let trades = if let Some(user_id) = user {
+        projection.trade.get_user_trades(user_id).await?
+    } else if let Some((base, quote)) = pair {
+        projection.trade.get_pair_trades(base, quote).await?
+    } else {
+        projection.trade.get_recent_trades(limit).await?
+    };
+
+    if trades.is_empty() {
+        println!("No trades found");
+        return Ok(());
+    }
+
+    println!("Trade History ({} trades):", trades.len());
+    println!("{:-<80}", "");
+    println!(
+        "{:>6} | {:>8} | {:>8} | {:>12} {:>6} | {:>12} {:>6}",
+        "ID", "Seller", "Buyer", "Sold", "Asset", "Bought", "Asset"
+    );
+    println!("{:-<80}", "");
+
+    for trade in trades.iter().take(limit as usize) {
+        println!(
+            "{:>6} | {:>8} | {:>8} | {:>12} {:>6} | {:>12} {:>6}",
+            trade.trade_id,
+            trade.seller,
+            trade.buyer,
+            trade.sell_amount,
+            trade.sell_asset,
+            trade.buy_amount,
+            trade.buy_asset,
+        );
+    }
+
+    Ok(())
+}

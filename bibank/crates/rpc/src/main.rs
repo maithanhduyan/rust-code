@@ -134,6 +134,24 @@ enum Commands {
         #[arg(long, default_value = "system.key")]
         output: PathBuf,
     },
+
+    // === Phase 2.1: Trade History ===
+
+    /// List trade history
+    Trades {
+        /// Filter by user ID
+        #[arg(long)]
+        user: Option<String>,
+        /// Filter by base asset (requires --quote)
+        #[arg(long)]
+        base: Option<String>,
+        /// Filter by quote asset (requires --base)
+        #[arg(long)]
+        quote: Option<String>,
+        /// Maximum number of trades to show
+        #[arg(long, default_value = "20")]
+        limit: u32,
+    },
 }
 
 #[tokio::main]
@@ -305,6 +323,19 @@ async fn main() -> anyhow::Result<()> {
             println!("   Public key: {}", pubkey);
             println!("");
             println!("To use: export BIBANK_SYSTEM_KEY={}", seed);
+        }
+
+        Commands::Trades {
+            user,
+            base,
+            quote,
+            limit,
+        } => {
+            let pair = match (&base, &quote) {
+                (Some(b), Some(q)) => Some((b.as_str(), q.as_str())),
+                _ => None,
+            };
+            commands::trades(&ctx, user.as_deref(), pair, limit).await?;
         }
     }
 

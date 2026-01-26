@@ -261,4 +261,3 @@ mod tests {
         assert_eq!(counting.count(), 1);
     }
 }
-
