@@ -1,0 +1,37 @@
+[package]
+name = "bibank-compliance"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank Compliance Engine - AML hooks, Rule DSL, KYC integration"
+
+[dependencies]
+# Workspace
+bibank-core.workspace = true
+bibank-ledger.workspace = true
+
+# Core
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+rust_decimal_macros.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+# Crypto (for rule hashing)
+sha2.workspace = true
+hex.workspace = true
+
+# Async
+async-trait.workspace = true
+tokio.workspace = true
+
+# Utilities
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

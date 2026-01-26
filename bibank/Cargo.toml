@@ -11,6 +11,8 @@ members = [
     "crates/oracle",
     "crates/matching",
     "crates/approval",
+    "crates/compliance",
+    "crates/hooks",
 ]
 resolver = "2"
 
@@ -68,3 +70,5 @@ bibank-matching = { path = "./crates/matching" }
 bibank-oracle = { path = "./crates/oracle" }
 bibank-dsl = { path = "./crates/dsl" }
 bibank-approval = { path = "./crates/approval" }
+bibank-compliance = { path = "./crates/compliance" }
+bibank-hooks = { path = "./crates/hooks" }

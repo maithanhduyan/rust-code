@@ -4,10 +4,21 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "BiBank DSL - Domain specific language macros (future)"
+description = "BiBank DSL - Domain specific language macros for compliance rules"
 
 [dependencies]
 bibank-rpc.workspace = true
+bibank-compliance.workspace = true
+bibank-hooks.workspace = true
+bibank-core.workspace = true
+
+# Core
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+tokio.workspace = true
+rust_decimal_macros.workspace = true

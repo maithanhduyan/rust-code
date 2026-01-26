@@ -1,0 +1,33 @@
+[package]
+name = "bibank-hooks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BiBank Hooks - Transaction lifecycle hooks for AML/Compliance"
+
+[dependencies]
+# Workspace
+bibank-core.workspace = true
+bibank-ledger.workspace = true
+bibank-compliance.workspace = true
+
+# Core
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+
+# Async
+async-trait.workspace = true
+tokio.workspace = true
+
+# Utilities
+tracing.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+bibank-dsl.workspace = true
