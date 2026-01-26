@@ -1,11 +1,25 @@
 # BiBank - Phase 4 Specification
 
-> **Document Version:** 1.0
+> **Document Version:** 2.0
 > **Date:** 2026-01-26
-> **Status:** 📝 DRAFT - Open for Review
+> **Status:** 🔒 LOCKED - Architecture Frozen
 > **Author:** Team BiBank
+> **Reviewed by:** GPT5, Gemini3 (100% Consensus)
 > **Depends on:** Phase 3 (Complete ✅)
-> **Target Reviewers:** GPT5, Gemini3
+
+---
+
+## 🔒 CONSENSUS SUMMARY
+
+| Decision | Resolution | Agreed By |
+|----------|------------|----------|
+| **Performance** | `ComplianceState` in-memory sliding window | GPT5 ✅ Gemini3 ✅ |
+| **DSL Flexibility** | Compile-time macro + `ComplianceConfig` thresholds | GPT5 ✅ Gemini3 ✅ |
+| **Flagged Flow** | Post-commit Lock + ComplianceIntent ledger | GPT5 ✅ Gemini3 ✅ |
+| **Decision Model** | Formal lattice with `max()` aggregation | GPT5 ✅ Gemini3 ✅ |
+| **External Deps** | FailClosed, 500ms timeout, 5min cache | GPT5 ✅ Gemini3 ✅ |
+| **Storage** | Dual Ledger (Main + Compliance JSONL) → SQLite Projection | GPT5 ✅ Gemini3 ✅ |
+| **Phase 4.1** | Section only (no separate file) | GPT5 ✅ Gemini3 ✅ |
 
 ---
 
@@ -42,6 +56,129 @@ Phase 4 tập trung vào:
 - **Real-time AML** detection tại thời điểm transaction
 - **Audit-ready** với compliance logs
 
+### 1.4 Key Architectural Decisions
+
+#### 1.4.1 Dual Ledger Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DUAL LEDGER ARCHITECTURE                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Main Journal Ledger (JSONL)    Compliance Ledger (JSONL)       │
+│  ├── Financial truth            ├── Decision truth              │
+│  ├── DepositConfirmed           ├── TransactionFlagged          │
+│  ├── TradeExecuted              ├── ReviewApproved              │
+│  └── LockApplied ◄──────────────┴── ComplianceIntent created   │
+│         │                                │                       │
+│         └────────────┬───────────────────┘                       │
+│                      ▼                                           │
+│               SQLite (Projection)                                │
+│               ├── balances                                       │
+│               ├── compliance_checks                              │
+│               └── pending_reviews                                │
+│                                                                  │
+│  ✅ Rebuildable 100% từ 2 ledgers                               │
+│  ✅ Append-only, tamper-evident                                  │
+│  ✅ Lock tiền = JournalEntry trong Main Ledger                   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### 1.4.2 ComplianceState (In-Memory Sliding Window)
+
+Để đạt O(1) query cho rules như `user.transactions_in_last(1.hour)`:
+
+```rust
+/// In-memory state for fast compliance checks
+pub struct ComplianceState {
+    /// Sliding window aggregates per user
+    windows: HashMap<UserId, TransactionWindow>,
+}
+
+/// 60 buckets for 60-minute sliding window
+pub struct TransactionWindow {
+    /// Circular buffer: each bucket = 1 minute
+    buckets: [Bucket; 60],
+    /// Current bucket index
+    current_idx: usize,
+    /// Last update timestamp
+    last_update: DateTime<Utc>,
+}
+
+#[derive(Default)]
+pub struct Bucket {
+    pub tx_count: u32,
+    pub volume: HashMap<String, Decimal>,  // asset -> amount
+}
+
+impl ComplianceState {
+    /// Rebuild from Compliance Ledger events on startup
+    pub fn replay(events: impl Iterator<Item = ComplianceEvent>) -> Self;
+
+    /// O(1) query: transactions in last N minutes
+    pub fn tx_count_in_last(&self, user: &UserId, minutes: u32) -> u32;
+
+    /// O(1) query: volume in last N minutes
+    pub fn volume_in_last(&self, user: &UserId, asset: &str, minutes: u32) -> Decimal;
+
+    /// Update when new transaction committed
+    pub fn record_transaction(&mut self, user: &UserId, asset: &str, amount: Decimal);
+}
+```
+
+#### 1.4.3 Hook Flow: BLOCK vs FLAG
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TRANSACTION FLOW (UPDATED)                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Intent Created                                                  │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────────────────────────────────────────┐                      │
+│  │ PRE-COMMIT HOOK (BLOCK rules only)     │                      │
+│  │ ├── Sanctions/Watchlist check          │                      │
+│  │ ├── KYC limit check                    │                      │
+│  │ └── Hard policy violations             │                      │
+│  └────────────────────────────────────────┘                      │
+│       │                                                          │
+│       ├── BLOCKED? ──► Reject immediately (no ledger entry)     │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────────────────────────────────────────┐                      │
+│  │ MAIN LEDGER COMMIT                     │                      │
+│  │ (Transaction recorded)                 │                      │
+│  └────────────────────────────────────────┘                      │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────────────────────────────────────────┐                      │
+│  │ POST-COMMIT HOOK (FLAG rules)          │                      │
+│  │ ├── Structuring detection              │                      │
+│  │ ├── Velocity anomalies                 │                      │
+│  │ └── Risk scoring                       │                      │
+│  └────────────────────────────────────────┘                      │
+│       │                                                          │
+│       ├── FLAGGED? ──► Create ComplianceIntent::Lock            │
+│       │                  ├── Write to Compliance Ledger          │
+│       │                  ├── Create Lock JournalEntry            │
+│       │                  └── User sees: "Under Review"           │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────────────────────────────────────────┐                      │
+│  │ COMPLIANCE LEDGER APPEND               │                      │
+│  │ (Decision recorded)                    │                      │
+│  └────────────────────────────────────────┘                      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Lợi ích:**
+- BLOCK rules: Reject ngay, không block main flow
+- FLAG rules: Tiền vào nhưng bị lock, user thấy trạng thái rõ ràng
+- Không có transaction "lửng lơ" bên ngoài ledger
+
 ---
 
 ## 2. Rule DSL Specification
@@ -52,8 +189,68 @@ Phase 4 tập trung vào:
 2. **Compile-time Safe** - Rust macro system catches errors early
 3. **Auditable** - Rules được hash và signed
 4. **Versioned** - Rule changes tracked in ledger
+5. **Configurable Thresholds** - Tham số từ `ComplianceConfig`, không hardcode
 
-### 2.2 DSL Syntax Overview
+### 2.2 ComplianceConfig (Configurable Thresholds)
+
+```rust
+/// Configuration loaded from file/env, not hardcoded
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComplianceConfig {
+    /// Thresholds
+    pub large_tx_threshold: Decimal,        // default: 10_000 USDT
+    pub ctr_threshold: Decimal,              // default: 10_000 USD
+    pub structuring_threshold: Decimal,      // default: 9_000 USDT
+    pub structuring_tx_count: u32,           // default: 3
+    pub new_account_days: i64,               // default: 7
+
+    /// Time windows
+    pub velocity_window_minutes: u32,        // default: 60 (1 hour)
+    pub velocity_tx_threshold: u32,          // default: 5
+
+    /// External services
+    pub external_timeout_ms: u64,            // default: 500
+    pub external_cache_ttl_secs: u64,        // default: 300 (5 min)
+    pub external_fail_policy: FailPolicy,    // default: FailClosed
+
+    /// Review
+    pub review_expiry_hours: u64,            // default: 72
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub enum FailPolicy {
+    /// Block transaction if external check fails (SAFER - DEFAULT)
+    #[default]
+    FailClosed,
+    /// Allow transaction but flag for review (RISKIER)
+    FailOpen,
+}
+
+impl Default for ComplianceConfig {
+    fn default() -> Self {
+        Self {
+            large_tx_threshold: Decimal::new(10_000, 0),
+            ctr_threshold: Decimal::new(10_000, 0),
+            structuring_threshold: Decimal::new(9_000, 0),
+            structuring_tx_count: 3,
+            new_account_days: 7,
+            velocity_window_minutes: 60,
+            velocity_tx_threshold: 5,
+            external_timeout_ms: 500,
+            external_cache_ttl_secs: 300,
+            external_fail_policy: FailPolicy::FailClosed,
+            review_expiry_hours: 72,
+        }
+    }
+}
+```
+
+**Lợi ích:**
+- Thay đổi threshold không cần recompile
+- Load từ file config hoặc environment variables
+- Production có thể tune theo jurisdiction
+
+### 2.3 DSL Syntax Overview
 
 ```rust
 use bibank_dsl::*;
@@ -69,7 +266,7 @@ rule_set! {
             name: "LARGE_TX_ALERT",
             description: "Flag transactions over 10,000 USDT",
 
-            when: transaction.amount >= 10_000 USDT,
+            when: transaction.amount >= config.large_tx_threshold,  // from ComplianceConfig
             then: {
                 flag_for_review("Large transaction detected");
                 notify_compliance_team();
@@ -81,8 +278,8 @@ rule_set! {
             name: "RAPID_TX_PATTERN",
             description: "Detect structuring attempts",
 
-            when: user.transactions_in_last(1.hour) >= 5
-              and user.total_volume_in_last(1.hour) >= 9_000 USDT,
+            when: user.transactions_in_last(config.velocity_window_minutes) >= config.velocity_tx_threshold
+              and user.total_volume_in_last(config.velocity_window_minutes) >= config.structuring_threshold,
             then: {
                 flag_for_review("Possible structuring detected");
                 set_risk_score(user, HIGH);
@@ -94,9 +291,9 @@ rule_set! {
             name: "NEW_ACCOUNT_LARGE_WD",
             description: "New accounts with large withdrawals",
 
-            when: user.account_age < 7.days
+            when: user.account_age < config.new_account_days.days
               and transaction.intent == Withdrawal
-              and transaction.amount >= 5_000 USDT,
+              and transaction.amount >= config.large_tx_threshold / 2,  // 50% of large_tx
             then: {
                 require_manual_approval();
                 flag_for_review("New account large withdrawal");
@@ -341,26 +538,36 @@ pub trait PostCommitHook: Send + Sync {
     ) -> Result<(), HookError>;
 }
 
-/// Decision from AML check
+/// Decision from AML check - FORMAL LATTICE
+/// Ordering: Approved < Flagged(L1) < Flagged(L2) < ... < Blocked
+/// Aggregation: max(all_decisions)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AmlDecision {
-    /// Transaction approved, continue
-    Approved,
+    /// Transaction approved, continue (lowest)
+    Approved = 0,
 
     /// Transaction flagged, requires manual review
     Flagged {
         reason: String,
         risk_score: RiskScore,
         required_approval: ApprovalLevel,
-    },
+    },  // = 1..4 based on ApprovalLevel
 
-    /// Transaction blocked
+    /// Transaction blocked (highest)
     Blocked {
         reason: String,
         compliance_code: String,
-    },
+    },  // = 5
 }
 
-/// Risk score levels
+impl AmlDecision {
+    /// Aggregate multiple decisions: take the most restrictive
+    pub fn aggregate(decisions: Vec<AmlDecision>) -> AmlDecision {
+        decisions.into_iter().max().unwrap_or(AmlDecision::Approved)
+    }
+}
+
+/// Risk score levels - also ordered
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RiskScore {
     Low = 1,
@@ -435,6 +642,28 @@ pub struct TransactionHistory {
 
     /// Count of transactions by type in last 24h
     pub tx_count_24h: HashMap<TransactionIntent, u32>,
+}
+
+/// External service configuration
+pub struct ExternalCheckConfig {
+    /// Timeout for external calls (KYC, Watchlist)
+    pub timeout: Duration,  // default: 500ms
+
+    /// What to do if external service fails
+    pub on_failure: FailPolicy,  // default: FailClosed
+
+    /// Cache TTL for external data
+    pub cache_ttl: Duration,  // default: 5 minutes
+}
+
+impl Default for ExternalCheckConfig {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_millis(500),
+            on_failure: FailPolicy::FailClosed,
+            cache_ttl: Duration::from_secs(300),
+        }
+    }
 }
 ```
 
@@ -609,10 +838,16 @@ pub struct ComplianceEngine {
     /// Watchlist provider
     watchlist_provider: Box<dyn WatchlistProvider>,
 
-    /// Compliance log storage
-    log_store: ComplianceLogStore,
+    /// Compliance log storage (writes to Compliance Ledger JSONL)
+    ledger_writer: ComplianceLedgerWriter,
 
-    /// Configuration
+    /// SQLite projection for queries
+    projection: ComplianceProjection,
+
+    /// In-memory state for fast checks
+    state: ComplianceState,
+
+    /// Configuration (loaded from file/env)
     config: ComplianceConfig,
 }
 
@@ -636,10 +871,35 @@ impl ComplianceEngine {
         // 3. Aggregate decisions
         let decision = self.aggregate_decisions(&results);
 
-        // 4. Log to compliance store
-        self.log_store.log_check(&context, &decision).await?;
+        // 4. Write to Compliance Ledger (JSONL - append-only)
+        let event = ComplianceEvent::CheckPerformed {
+            correlation_id: entry.correlation_id.clone(),
+            user_id: user_id.to_string(),
+            decision: decision.clone(),
+            rules_triggered: results.iter().flat_map(|r| r.triggered_rules()).collect(),
+            timestamp: Utc::now(),
+        };
+        self.ledger_writer.append(&event)?;
+
+        // 5. Update SQLite projection
+        self.projection.record_check(&event).await?;
+
+        // 6. Update in-memory state
+        self.state.record_transaction(user_id, &entry.asset, entry.amount);
+
+        // 7. If flagged, create Lock entry in Main Ledger
+        if let AmlDecision::Flagged { .. } = &decision {
+            self.create_lock_entry(entry, user_id).await?;
+        }
 
         Ok(decision)
+    }
+
+    /// Create a Lock JournalEntry in Main Ledger for flagged transactions
+    async fn create_lock_entry(&self, entry: &UnsignedEntry, user_id: &str) -> Result<(), ComplianceError> {
+        // Creates Adjustment intent to lock funds
+        // User sees: "Balance: X (Under Review)"
+        todo!("Implement lock entry creation")
     }
 
     /// Add a new rule set
@@ -665,10 +925,87 @@ impl ComplianceEngine {
 }
 ```
 
-### 4.3 Compliance Log Schema
+### 4.3 Compliance Ledger Schema (JSONL - Source of Truth)
+
+File: `data/compliance/compliance_ledger.jsonl`
+
+```rust
+/// Events appended to Compliance Ledger (append-only JSONL)
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ComplianceEvent {
+    /// Transaction was checked against rules
+    CheckPerformed {
+        id: String,
+        correlation_id: String,
+        user_id: String,
+        decision: AmlDecision,
+        rules_triggered: Vec<String>,
+        risk_score: Option<RiskScore>,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Transaction was flagged for review
+    TransactionFlagged {
+        id: String,
+        correlation_id: String,
+        user_id: String,
+        reason: String,
+        required_approval: ApprovalLevel,
+        expires_at: DateTime<Utc>,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Review decision made
+    ReviewCompleted {
+        id: String,
+        flag_id: String,
+        decision: ReviewDecision,
+        reviewer_id: String,
+        notes: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Rule set activated/deactivated
+    RuleSetChanged {
+        id: String,
+        rule_set_name: String,
+        rule_set_version: String,
+        rule_set_hash: String,
+        action: RuleAction,  // Activated, Deactivated
+        performed_by: String,
+        approved_by: Vec<String>,
+        timestamp: DateTime<Utc>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ReviewDecision {
+    Approved,
+    Rejected,
+    Expired,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum RuleAction {
+    Activated,
+    Deactivated,
+}
+```
+
+**Example JSONL entries:**
+```jsonl
+{"type":"CheckPerformed","id":"CHK-001","correlation_id":"TX-123","user_id":"ALICE","decision":"Approved","rules_triggered":[],"timestamp":"2026-01-26T10:00:00Z"}
+{"type":"TransactionFlagged","id":"FLG-001","correlation_id":"TX-456","user_id":"BOB","reason":"Large transaction","required_approval":"L1","expires_at":"2026-01-29T10:00:00Z","timestamp":"2026-01-26T10:00:00Z"}
+{"type":"ReviewCompleted","id":"REV-001","flag_id":"FLG-001","decision":"Approved","reviewer_id":"COMPLIANCE_OFFICER_1","notes":"Verified source of funds","timestamp":"2026-01-26T14:00:00Z"}
+```
+
+### 4.4 SQLite Projection Schema (Query Layer)
+
+> ⚠️ SQLite là **projection** từ Compliance Ledger, có thể rebuild 100%
 
 ```sql
--- Compliance check logs
+-- Compliance check logs (projected from ComplianceEvent::CheckPerformed)
 CREATE TABLE compliance_checks (
     id TEXT PRIMARY KEY,
     correlation_id TEXT NOT NULL,
@@ -1203,6 +1540,64 @@ pub enum ComplianceMode {
 | W10 | CLI & Testing | Commands, 120+ tests |
 
 **Total:** ~10 weeks
+
+---
+
+## 14. Future: Dynamic Rule Loading (Phase 4.1+)
+
+> ⚠️ **NOT IN SCOPE FOR PHASE 4** - Chỉ là định hướng kiến trúc
+
+### 14.1 Vấn đề
+
+Phase 4 sử dụng compile-time macros (`rule!`, `rule_set!`):
+- ✅ Type-safe, zero-cost abstraction
+- ❌ Sửa threshold/rule = recompile + redeploy binary
+
+### 14.2 Hướng đi Phase 4.1+
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DYNAMIC RULE LOADING (FUTURE)                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Rule Bundle (.wasm / .rlib)                                    │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌─────────────────────────────────────────┐                    │
+│  │ Governance Contract                      │                    │
+│  │ ├── 2-of-3 multi-sig activation          │                    │
+│  │ ├── Time-lock (24h delay)                │                    │
+│  │ └── Emergency disable (1-of-3)           │                    │
+│  └─────────────────────────────────────────┘                    │
+│       │                                                          │
+│       ▼                                                          │
+│  Rule Registry (Hot-reload)                                     │
+│       │                                                          │
+│       ▼                                                          │
+│  Compliance Engine                                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 14.3 Key Design Decisions (Deferred)
+
+| Item | Status |
+|------|--------|
+| Rule bundle format (WASM vs native) | ⏳ TBD |
+| Governance model | ⏳ TBD |
+| Rollback semantics | ⏳ TBD |
+| ABI stability | ⏳ TBD |
+
+### 14.4 Why Not Now?
+
+1. **Phase 4 đã đủ phức tạp** - Focus làm compile-time DSL chạy mượt trước
+2. **Unsafe code** - Dynamic loading cần careful memory management
+3. **Config đã đủ linh hoạt** - `ComplianceConfig` cho phép tune thresholds mà không recompile
+
+**Khi nào cần Phase 4.1?**
+- Khi có > 50 rules active
+- Khi Compliance team cần deploy rule changes trong < 1 hour
+- Khi cần A/B testing rules
 
 ---
 
