@@ -14,6 +14,7 @@ members = [
     "crates/compliance",
     "crates/hooks",
 ]
+exclude = [".tools/mcp"]
 resolver = "2"
 
 [workspace.package]
