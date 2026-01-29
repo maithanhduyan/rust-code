@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Multiplayer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+        }
+
+        h1 {
+            color: #00ff88;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+        }
+
+        #gameCanvas {
+            border: 3px solid #00ff88;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+            background-color: #0f0f1a;
+        }
+
+        #status {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background-color: #2a2a4a;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        #status.connected {
+            color: #00ff88;
+        }
+
+        #status.disconnected {
+            color: #ff4444;
+        }
+
+        #players {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        .instructions {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐍 Snake Multiplayer</h1>
+    <canvas id="gameCanvas" width="640" height="480"></canvas>
+    <div id="status" class="disconnected">Connecting...</div>
+    <div id="players">Players: 0</div>
+    <div class="instructions">Use arrow keys to move</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const playersEl = document.getElementById('players');
+
+        const GRID_SIZE = 10;
+        const PLAYFIELD_WIDTH = 640;
+        const PLAYFIELD_HEIGHT = 480;
+
+        let socket = null;
+        let snakes = [];
+        let foods = [];
+        let myId = null;
+
+        // WebSocket connection
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/snake`;
+
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                console.log('Connected to server');
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'connected';
+            };
+
+            socket.onclose = () => {
+                console.log('Disconnected from server');
+                statusEl.textContent = 'Disconnected - Reconnecting...';
+                statusEl.className = 'disconnected';
+                snakes = [];
+                // Reconnect after 2 seconds
+                setTimeout(connect, 2000);
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleMessage(message);
+                } catch (e) {
+                    console.error('Failed to parse message:', e);
+                }
+            };
+        }
+
+        // Handle incoming messages
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'join':
+                    console.log('Players joined:', message.data);
+                    // Get our ID (last one in the list for new joins)
+                    if (message.data.length > 0) {
+                        myId = message.data[message.data.length - 1].id;
+                    }
+                    playersEl.textContent = `Players: ${message.data.length}`;
+                    break;
+
+                case 'update':
+                    snakes = message.data;
+                    foods = message.food || [];
+                    playersEl.textContent = `Players: ${snakes.length}`;
+                    break;
+
+                case 'leave':
+                    console.log('Player left:', message.id);
+                    snakes = snakes.filter(s => s.id !== message.id);
+                    playersEl.textContent = `Players: ${snakes.length}`;
+                    break;
+
+                case 'dead':
+                    console.log('You died!');
+                    statusEl.textContent = 'You died! Respawning...';
+                    setTimeout(() => {
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            statusEl.textContent = 'Connected';
+                        }
+                    }, 2000);
+                    break;
+
+                case 'kill':
+                    console.log('You killed someone!');
+                    break;
+            }
+        }
+
+        // Send direction to server
+        function sendDirection(direction) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(direction);
+            }
+        }
+
+        // Keyboard controls
+        document.addEventListener('keydown', (event) => {
+            switch (event.key) {
+                case 'ArrowUp':
+                    sendDirection('north');
+                    event.preventDefault();
+                    break;
+                case 'ArrowDown':
+                    sendDirection('south');
+                    event.preventDefault();
+                    break;
+                case 'ArrowLeft':
+                    sendDirection('west');
+                    event.preventDefault();
+                    break;
+                case 'ArrowRight':
+                    sendDirection('east');
+                    event.preventDefault();
+                    break;
+            }
+        });
+
+        // Game rendering
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#0f0f1a';
+            ctx.fillRect(0, 0, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
+
+            // Draw grid (subtle)
+            ctx.strokeStyle = '#1a1a2e';
+            ctx.lineWidth = 0.5;
+            for (let x = 0; x <= PLAYFIELD_WIDTH; x += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, PLAYFIELD_HEIGHT);
+                ctx.stroke();
+            }
+            for (let y = 0; y <= PLAYFIELD_HEIGHT; y += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(PLAYFIELD_WIDTH, y);
+                ctx.stroke();
+            }
+
+            // Draw food
+            for (const food of foods) {
+                // Draw food as a red/orange circle
+                ctx.fillStyle = '#ff6b6b';
+                ctx.beginPath();
+                ctx.arc(
+                    food.x + GRID_SIZE / 2,
+                    food.y + GRID_SIZE / 2,
+                    GRID_SIZE / 2 - 1,
+                    0,
+                    Math.PI * 2
+                );
+                ctx.fill();
+
+                // Add glow effect
+                ctx.shadowColor = '#ff6b6b';
+                ctx.shadowBlur = 5;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            // Draw snakes
+            for (const snake of snakes) {
+                const isMe = snake.id === myId;
+                const color = snake.color || '#00ff88';
+
+                for (let i = 0; i < snake.body.length; i++) {
+                    const segment = snake.body[i];
+                    const isHead = i === 0;
+
+                    // Draw segment
+                    ctx.fillStyle = isHead ? lightenColor(color, 30) : color;
+                    ctx.fillRect(
+                        segment.x + 1,
+                        segment.y + 1,
+                        GRID_SIZE - 2,
+                        GRID_SIZE - 2
+                    );
+
+                    // Draw highlight for own snake head
+                    if (isHead && isMe) {
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(
+                            segment.x,
+                            segment.y,
+                            GRID_SIZE,
+                            GRID_SIZE
+                        );
+                    }
+                }
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // Helper function to lighten a color
+        function lightenColor(color, percent) {
+            const num = parseInt(color.replace('#', ''), 16);
+            const amt = Math.round(2.55 * percent);
+            const R = (num >> 16) + amt;
+            const G = (num >> 8 & 0x00FF) + amt;
+            const B = (num & 0x0000FF) + amt;
+            return '#' + (
+                0x1000000 +
+                (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
+                (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
+                (B < 255 ? (B < 1 ? 0 : B) : 255)
+            ).toString(16).slice(1);
+        }
+
+        // Keep-alive ping every 5 seconds
+        setInterval(() => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send('ping');
+            }
+        }, 5000);
+
+        // Start the game
+        connect();
+        render();
+    </script>
+</body>
+</html>
