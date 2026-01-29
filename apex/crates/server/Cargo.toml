@@ -1,0 +1,32 @@
+[package]
+name = "apex-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HTTP server implementation for Apex reverse proxy"
+
+[dependencies]
+apex-core.workspace = true
+apex-config.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# HTTP stack
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+http.workspace = true
+bytes.workspace = true
+
+# Lock-free config
+arc-swap.workspace = true
+dashmap.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true

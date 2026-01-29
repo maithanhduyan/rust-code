@@ -1,0 +1,16 @@
+# Apex Proxy Configuration
+
+[server]
+listen = "127.0.0.1:8080"
+timeout_secs = 30
+
+# Default route - load balance between echo servers
+[[routes]]
+name = "echo-backend"
+host = "*"
+path_prefix = "/"
+strip_prefix = false
+
+[[routes.backends]]
+url = "http://127.0.0.1:9001"
+weight = 1

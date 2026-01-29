@@ -1,0 +1,49 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "MCP: Build Debug",
+            "type": "shell",
+            "command": "cargo build",
+            "options": { 
+                "cwd": "${workspaceFolder}/.tools/mcp"
+            },
+            "group": "build",
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "MCP: Build Release",
+            "type": "shell",
+            "command": "cargo build --release",
+            "options": { 
+                "cwd": "${workspaceFolder}/.tools/mcp"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "MCP: Clean & Rebuild",
+            "type": "shell",
+            "command": "cargo clean && cargo build --release",
+            "options": { 
+                "cwd": "${workspaceFolder}/.tools/mcp"
+            },
+            "group": "build",
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "MCP: Run Server",
+            "type": "shell",
+            "command": "./target/release/thinking-mcp.exe",
+            "options": { 
+                "cwd": "${workspaceFolder}/.tools/mcp"
+            },
+            "group": "none",
+            "isBackground": true,
+            "problemMatcher": []
+        }
+    ]
+}

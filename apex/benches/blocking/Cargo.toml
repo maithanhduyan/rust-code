@@ -1,0 +1,43 @@
+[package]
+name = "blocking-tools"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Pure Rust tools - NO EXTERNAL DEPENDENCIES
+
+# Exclude from workspace
+[workspace]
+
+[[bin]]
+name = "blocking-proxy"
+path = "blocking_proxy.rs"
+
+[[bin]]
+name = "blocking-echo"
+path = "blocking_echo.rs"
+
+[[bin]]
+name = "blocking-bench"
+path = "blocking_bench.rs"
+
+[[bin]]
+name = "hp-proxy"
+path = "hp_proxy.rs"
+
+[[bin]]
+name = "hp-proxy-v2"
+path = "hp_proxy_v2.rs"
+
+[[bin]]
+name = "hp-bench"
+path = "hp_bench.rs"
+
+# No dependencies - pure std library only
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

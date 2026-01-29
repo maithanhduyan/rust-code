@@ -1,0 +1,33 @@
+[package]
+name = "hp-proxy"
+version = "0.2.0"
+edition = "2021"
+description = "High-Performance io_uring Reverse Proxy"
+license = "MIT"
+
+[dependencies]
+monoio = { version = "0.2", features = ["sync", "utils"] }
+memchr = "2.7"
+bytes = "1.5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "hp-proxy"
+path = "src/main.rs"
+
+[[bin]]
+name = "hp-echo"
+path = "src/echo.rs"
+
+[[bin]]
+name = "hp-bench"
+path = "src/bench.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

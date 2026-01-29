@@ -1,0 +1,45 @@
+[package]
+name = "apex-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# HTTP/2 Benchmarking Tools
+
+[[bin]]
+name = "echo-server-h2"
+path = "echo_server_h2.rs"
+
+[[bin]]
+name = "bench-h2"
+path = "bench_h2.rs"
+
+[[bin]]
+name = "bench-h2-v2"
+path = "bench_h2_v2.rs"
+
+[[bin]]
+name = "http2-proxy-lockfree"
+path = "http2_proxy_lockfree.rs"
+
+[[bin]]
+name = "raw-h2-proxy"
+path = "raw_h2_proxy.rs"
+
+# Legacy HTTP/1.1 tools (kept for comparison)
+
+[[bin]]
+name = "echo-server"
+path = "echo_server.rs"
+
+[[bin]]
+name = "bench"
+path = "bench.rs"
+
+[dependencies]
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+arc-swap.workspace = true

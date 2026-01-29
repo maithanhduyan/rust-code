@@ -1,0 +1,38 @@
+#
+traefik/
+nginx/
+
+# Build artifacts
+/target/
+/crates/*/target/
+/benches/target/
+
+# Cargo lock for libraries
+# Cargo.lock  # Keep for binary crate
+
+# IDE
+.idea/
+*.iml
+.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local config
+local.toml
+*.local.toml
+
+# Certificates (generated)
+*.pem
+*.crt
+*.key
+!testdata/**
+
+# Benchmark results
+results/
+*.wrk.txt

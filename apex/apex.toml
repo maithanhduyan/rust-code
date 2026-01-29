@@ -1,0 +1,8 @@
+# Apex Proxy Configuration
+
+[[routes]]
+name = "default"
+path = "/"
+
+[[routes.backends]]
+url = "http://127.0.0.1:9001"

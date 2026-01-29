@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/apex",
+    "crates/core",
+    "crates/config",
+    "crates/server",
+    "benches",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/apex"
+authors = ["Apex Team"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP stack
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+
+# TLS
+rustls = { version = "0.23", default-features = false }
+tokio-rustls = "0.26"
+
+# Lock-free primitives
+arc-swap = "1"
+dashmap = "6"
+
+# Config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Internal crates
+apex-core = { path = "crates/core" }
+apex-config = { path = "crates/config" }
+apex-server = { path = "crates/server" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+lto = true
+codegen-units = 1

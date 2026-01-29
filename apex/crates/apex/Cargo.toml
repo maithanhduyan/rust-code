@@ -1,0 +1,24 @@
+[package]
+name = "apex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "High-performance reverse proxy written in Rust"
+
+[[bin]]
+name = "apex"
+path = "src/main.rs"
+
+[dependencies]
+apex-core.workspace = true
+apex-config.workspace = true
+apex-server.workspace = true
+
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+# CLI
+clap = { version = "4", features = ["derive"] }

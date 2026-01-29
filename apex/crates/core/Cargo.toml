@@ -1,0 +1,18 @@
+[package]
+name = "apex-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core hot-path logic for Apex reverse proxy"
+
+[dependencies]
+# Minimal dependencies for hot path
+bytes.workspace = true
+http.workspace = true
+arc-swap.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

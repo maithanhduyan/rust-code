@@ -1,0 +1,11 @@
+{
+    "servers": {
+        "thinking": {
+            "command": "${workspaceFolder}/.tools/mcp/target/release/thinking-mcp.exe",
+            "args": [],
+            "env": {
+                "MEMORY_FILE_PATH": "${workspaceFolder}/.tools/data/memory.jsonl"
+            }
+        },
+    }
+}
