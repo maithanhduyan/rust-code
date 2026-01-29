@@ -1,0 +1,26 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "REST API server"
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[dependencies]
+core = { path = "../core" }
+utils = { path = "../utils" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+# API specific dependencies
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }

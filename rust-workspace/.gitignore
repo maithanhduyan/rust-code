@@ -1,0 +1,20 @@
+# Generated files
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cargo.lock for libraries (uncomment if this is a library)
+# Cargo.lock
