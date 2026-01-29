@@ -1,38 +1,12 @@
 {
     "servers": {
         "memory": {
-            "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "-v",
-                "/local-directory:/local-directory",
-                "mcp/memory"
-            ]
-        },
-        "sequentialthinking": {
-            "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "mcp/sequentialthinking"
-            ]
-        },
-        "chroma": {
-            "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "-e",
-                "CHROMA_API_KEY",
-                "mcp/chroma"
-            ],
+            "command": "${workspaceFolder}/.tools/mcp/target/release/thinking-mcp.exe",
+            "args": [],
             "env": {
-                "CHROMA_API_KEY": "your-api-key"
+                "MEMORY_FILE_PATH": "${workspaceFolder}/.tools/data/memory.jsonl"
             }
-        }
+        },
+
     }
 }
