@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat - Rust WebSocket</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>💬 WebSocket Chat</h1>
+        
+        <div id="status-bar">
+            <span id="connection-status" class="status disconnected">Disconnected</span>
+            <span id="user-count"></span>
+        </div>
+        
+        <div id="chat-container">
+            <div id="messages"></div>
+        </div>
+        
+        <div id="input-container">
+            <input type="text" id="message-input" 
+                   placeholder="Type a message and press Enter..."
+                   autocomplete="off" disabled>
+            <button id="send-button" disabled>Send</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

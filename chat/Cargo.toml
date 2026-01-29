@@ -1,0 +1,26 @@
+[package]
+name = "chat-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A simple WebSocket chat application"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs"] }
+
+# WebSocket
+futures-util = "0.3"
+
+# Utilities
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+# HTML sanitization (thay thế HTMLFilter)
+ammonia = "4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tokio-tungstenite = "0.21"
