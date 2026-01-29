@@ -8,10 +8,24 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio_postgres::{Client, NoTls, Row};
 
+// Access modes for database operations
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AccessMode {
+    Restricted,   // Read-only, safe for production
+    Unrestricted, // Full access, for development
+}
+
+impl Default for AccessMode {
+    fn default() -> Self {
+        AccessMode::Restricted
+    }
+}
+
 // Global PostgreSQL connection state
 lazy_static::lazy_static! {
     static ref PG_CONNECTION: Arc<Mutex<Option<PgConnection>>> = Arc::new(Mutex::new(None));
     static ref RUNTIME: Runtime = Runtime::new().expect("Failed to create Tokio runtime");
+    static ref ACCESS_MODE: Arc<Mutex<AccessMode>> = Arc::new(Mutex::new(AccessMode::Restricted));
 }
 
 struct PgConnection {
@@ -26,6 +40,267 @@ fn format_result_text(text: &str) -> serde_json::Value {
             "text": text
         }]
     })
+}
+
+// Helper to check if current mode allows write operations
+fn is_write_allowed() -> bool {
+    let mode = ACCESS_MODE.lock().unwrap();
+    *mode == AccessMode::Unrestricted
+}
+
+// Helper to get current access mode as string
+fn get_access_mode_str() -> String {
+    let mode = ACCESS_MODE.lock().unwrap();
+    match *mode {
+        AccessMode::Restricted => "🔒 Restricted (read-only)".to_string(),
+        AccessMode::Unrestricted => "🔓 Unrestricted (full access)".to_string(),
+    }
+}
+
+// ============================================================================
+// SetAccessModeTool
+// ============================================================================
+
+#[derive(Deserialize)]
+struct SetAccessModeParams {
+    mode: String,
+}
+
+pub struct SetAccessModeTool;
+
+impl SetAccessModeTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SetAccessModeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for SetAccessModeTool {
+    fn definition(&self) -> McpTool {
+        McpTool {
+            name: "set_access_mode".to_string(),
+            description: "Thiết lập access mode: restricted (production) hoặc unrestricted (development)".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "description": "Access mode: 'restricted' (read-only) hoặc 'unrestricted' (full access)",
+                        "enum": ["restricted", "unrestricted"]
+                    }
+                },
+                "required": ["mode"]
+            }),
+        }
+    }
+
+    fn execute(&self, params: serde_json::Value) -> McpResult<serde_json::Value> {
+        let mode_params: SetAccessModeParams = serde_json::from_value(params)
+            .map_err(|e| format!("Invalid parameters: {}", e))?;
+
+        let new_mode = match mode_params.mode.to_lowercase().as_str() {
+            "restricted" => AccessMode::Restricted,
+            "unrestricted" => AccessMode::Unrestricted,
+            _ => return Ok(format_result_text("❌ Invalid mode. Use 'restricted' or 'unrestricted'")),
+        };
+
+        let mut mode = ACCESS_MODE.lock().unwrap();
+        *mode = new_mode;
+
+        let message = match new_mode {
+            AccessMode::Restricted => "🔒 Access mode set to RESTRICTED (read-only, safe for production)\n• Only SELECT queries allowed\n• DDL/DML operations blocked",
+            AccessMode::Unrestricted => "🔓 Access mode set to UNRESTRICTED (full access, for development)\n• All SQL operations allowed\n• ⚠️ Use with caution!",
+        };
+
+        Ok(format_result_text(message))
+    }
+}
+
+// ============================================================================
+// GetAccessModeTool
+// ============================================================================
+
+pub struct GetAccessModeTool;
+
+impl GetAccessModeTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for GetAccessModeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for GetAccessModeTool {
+    fn definition(&self) -> McpTool {
+        McpTool {
+            name: "get_access_mode".to_string(),
+            description: "Hiển thị access mode hiện tại".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    fn execute(&self, _params: serde_json::Value) -> McpResult<serde_json::Value> {
+        let mode_str = get_access_mode_str();
+        let info = match *ACCESS_MODE.lock().unwrap() {
+            AccessMode::Restricted => format!("{}\n\n📋 Allowed operations:\n• SELECT queries\n• EXPLAIN queries\n• Health checks\n\n🚫 Blocked operations:\n• CREATE/DROP/ALTER\n• INSERT/UPDATE/DELETE\n• TRUNCATE", mode_str),
+            AccessMode::Unrestricted => format!("{}\n\n📋 Allowed operations:\n• All SQL operations\n• DDL (CREATE, DROP, ALTER)\n• DML (INSERT, UPDATE, DELETE)\n\n⚠️ Warning: Use only in development!", mode_str),
+        };
+        Ok(format_result_text(&info))
+    }
+}
+
+// ============================================================================
+// ExecuteSqlTool (replaces execute_query with access mode support)
+// ============================================================================
+
+#[derive(Deserialize)]
+struct ExecuteSqlParams {
+    sql: String,
+    limit: Option<i64>,
+}
+
+pub struct ExecuteSqlTool;
+
+impl ExecuteSqlTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ExecuteSqlTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for ExecuteSqlTool {
+    fn definition(&self) -> McpTool {
+        McpTool {
+            name: "execute_sql".to_string(),
+            description: "Thực thi SQL (respects access mode: restricted = SELECT only, unrestricted = all)".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "SQL statement to execute"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows for SELECT queries",
+                        "default": 100
+                    }
+                },
+                "required": ["sql"]
+            }),
+        }
+    }
+
+    fn execute(&self, params: serde_json::Value) -> McpResult<serde_json::Value> {
+        let sql_params: ExecuteSqlParams = serde_json::from_value(params)
+            .map_err(|e| format!("Invalid parameters: {}", e))?;
+        let sql = sql_params.sql.trim();
+        let limit = sql_params.limit.unwrap_or(100);
+
+        // Parse SQL to determine operation type
+        let sql_lower = sql.to_lowercase();
+        let first_word = sql_lower.split_whitespace().next().unwrap_or("");
+
+        let is_select = first_word == "select";
+        let is_show = first_word == "show";
+        let is_explain = first_word == "explain";
+        let is_read_only = is_select || is_show || is_explain;
+
+        // Check access mode
+        if !is_read_only && !is_write_allowed() {
+            return Ok(format_result_text(&format!(
+                "🔒 BLOCKED: {} operation not allowed in RESTRICTED mode.\n\n\
+                 Current mode: {}\n\n\
+                 To enable write operations, run:\n\
+                 set_access_mode(mode='unrestricted')",
+                first_word.to_uppercase(),
+                get_access_mode_str()
+            )));
+        }
+
+        // Add LIMIT to SELECT if not present
+        let final_sql = if is_select && !sql_lower.contains("limit") {
+            format!("{} LIMIT {}", sql.trim_end_matches(';'), limit)
+        } else {
+            sql.to_string()
+        };
+
+        let conn_guard = PG_CONNECTION.lock().unwrap();
+        let conn = match conn_guard.as_ref() {
+            Some(c) => c,
+            None => return Ok(format_result_text("❌ Chưa kết nối đến PostgreSQL")),
+        };
+
+        let result = RUNTIME.block_on(async {
+            if is_select || is_show || is_explain {
+                // Query that returns rows
+                match conn.client.query(&final_sql, &[]).await {
+                    Ok(rows) => {
+                        if rows.is_empty() {
+                            return Ok(format_result_text("📊 Query executed successfully. No rows returned."));
+                        }
+
+                        let columns: Vec<String> = rows[0]
+                            .columns()
+                            .iter()
+                            .map(|c| c.name().to_string())
+                            .collect();
+
+                        let mut data_text = format!("📊 Query Result ({} rows):\n\n", rows.len());
+                        data_text.push_str(&format!("Columns: {}\n", columns.join(" | ")));
+                        data_text.push_str(&"-".repeat(80));
+                        data_text.push('\n');
+
+                        for row in rows.iter().take(20) {
+                            let row_values: Vec<String> = (0..columns.len())
+                                .map(|i| format_column_value(row, i))
+                                .collect();
+                            data_text.push_str(&row_values.join(" | "));
+                            data_text.push('\n');
+                        }
+
+                        if rows.len() > 20 {
+                            data_text.push_str(&format!("\n... và {} dòng khác", rows.len() - 20));
+                        }
+
+                        Ok(format_result_text(&data_text))
+                    }
+                    Err(e) => Ok(format_result_text(&format!("❌ Error: {}", e))),
+                }
+            } else {
+                // DDL/DML that doesn't return rows
+                match conn.client.execute(&final_sql, &[]).await {
+                    Ok(affected) => {
+                        Ok(format_result_text(&format!(
+                            "✅ SQL executed successfully!\n\nStatement: {}\nRows affected: {}",
+                            first_word.to_uppercase(),
+                            affected
+                        )))
+                    }
+                    Err(e) => Ok(format_result_text(&format!("❌ Error: {}", e))),
+                }
+            }
+        });
+
+        result
+    }
 }
 
 // ============================================================================
@@ -120,7 +395,12 @@ impl Tool for ConnectPostgresTool {
 
                     let mut conn_guard = PG_CONNECTION.lock().unwrap();
                     *conn_guard = Some(PgConnection { client });
-                    Ok(format_result_text("✅ Kết nối thành công!"))
+
+                    let mode_str = get_access_mode_str();
+                    Ok(format_result_text(&format!(
+                        "✅ Kết nối thành công!\n\n📊 Database: {}\n🖥️ Host: {}:{}\n👤 User: {}\n🔐 Mode: {}",
+                        database, host, port, user, mode_str
+                    )))
                 }
                 Err(e) => Ok(format_result_text(&format!("❌ Kết nối thất bại: {}", e))),
             }
