@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drawboard - Rust WebSocket</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div id="drawContainer" class="hidden">
+            <div id="labelContainer">
+                <span id="playerCount">Players: 0</span>
+                <span id="connectionStatus" class="status connected">Connected</span>
+            </div>
+            <canvas id="canvas"></canvas>
+
+            <div id="toolbar">
+                <div class="tool-group">
+                    <label>Tool:</label>
+                    <select id="toolSelect">
+                        <option value="1">Brush</option>
+                        <option value="2">Line</option>
+                        <option value="3">Rectangle</option>
+                        <option value="4">Ellipse</option>
+                    </select>
+                </div>
+
+                <div class="tool-group">
+                    <label>Thickness:</label>
+                    <select id="thicknessSelect">
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="6" selected>6</option>
+                        <option value="10">10</option>
+                        <option value="16">16</option>
+                        <option value="28">28</option>
+                        <option value="50">50</option>
+                    </select>
+                </div>
+
+                <div class="tool-group">
+                    <label>Color:</label>
+                    <input type="color" id="colorPicker" value="#000000">
+                </div>
+
+                <div class="tool-group">
+                    <label>Opacity:</label>
+                    <input type="range" id="alphaSlider" min="0" max="255" value="255">
+                    <span id="alphaValue">100%</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="console-container">
+            <h3>Console</h3>
+            <div id="console"></div>
+        </div>
+    </div>
+
+    <div id="about">
+        <h2>About Drawboard WebSocket</h2>
+        <p>
+            This is a collaborative drawing board where multiple users can draw together in real-time.
+            All drawings are synchronized via WebSocket.
+        </p>
+        <ul>
+            <li><strong>Brush:</strong> Freehand drawing</li>
+            <li><strong>Line:</strong> Draw straight lines</li>
+            <li><strong>Rectangle:</strong> Draw rectangles</li>
+            <li><strong>Ellipse:</strong> Draw ellipses/circles</li>
+        </ul>
+        <p>
+            <strong>Server:</strong> Rust + Axum + tokio<br>
+            <strong>Canvas:</strong> tiny-skia (server-side rendering)
+        </p>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
