@@ -148,6 +148,13 @@ impl MemoryManagementTool {
             Err(_) => default_memory_path.to_string_lossy().to_string(),
         };
 
+        // Tạo thư mục cha nếu chưa tồn tại
+        if let Some(parent) = Path::new(&memory_file_path).parent() {
+            if !parent.exists() {
+                let _ = fs::create_dir_all(parent);
+            }
+        }
+
         // Luôn tạo file nếu chưa tồn tại để tránh lỗi read_to_string
         if !Path::new(&memory_file_path).exists() {
             let _ = fs::File::create(&memory_file_path);
@@ -457,7 +464,7 @@ impl Tool for MemoryManagementTool {
                         "type": "string",
                         "enum": [
                             "create_entities",
-                            "create_relations", 
+                            "create_relations",
                             "add_observations",
                             "delete_entities",
                             "delete_observations",
@@ -475,8 +482,8 @@ impl Tool for MemoryManagementTool {
                             "properties": {
                                 "name": { "type": "string", "description": "The name of the entity" },
                                 "entityType": { "type": "string", "description": "The type of the entity" },
-                                "observations": { 
-                                    "type": "array", 
+                                "observations": {
+                                    "type": "array",
                                     "items": { "type": "string" },
                                     "description": "An array of observation contents associated with the entity"
                                 },
@@ -504,8 +511,8 @@ impl Tool for MemoryManagementTool {
                             "type": "object",
                             "properties": {
                                 "entityName": { "type": "string", "description": "The name of the entity to add the observations to" },
-                                "contents": { 
-                                    "type": "array", 
+                                "contents": {
+                                    "type": "array",
                                     "items": { "type": "string" },
                                     "description": "An array of observation contents to add"
                                 },
@@ -514,10 +521,10 @@ impl Tool for MemoryManagementTool {
                         },
                         "description": "Array of observations for add_observations operation"
                     },
-                    "entityNames": { 
-                        "type": "array", 
+                    "entityNames": {
+                        "type": "array",
                         "items": { "type": "string" },
-                        "description": "An array of entity names for delete_entities operation" 
+                        "description": "An array of entity names for delete_entities operation"
                     },
                     "deletions": {
                         "type": "array",
@@ -525,8 +532,8 @@ impl Tool for MemoryManagementTool {
                             "type": "object",
                             "properties": {
                                 "entityName": { "type": "string", "description": "The name of the entity containing the observations" },
-                                "observations": { 
-                                    "type": "array", 
+                                "observations": {
+                                    "type": "array",
                                     "items": { "type": "string" },
                                     "description": "An array of observations to delete"
                                 },
@@ -535,9 +542,9 @@ impl Tool for MemoryManagementTool {
                         },
                         "description": "Array of observation deletions for delete_observations operation"
                     },
-                    "query": { 
-                        "type": "string", 
-                        "description": "The search query to match against entity names, types, and observation content for search_nodes operation" 
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to match against entity names, types, and observation content for search_nodes operation"
                     },
                     "names": {
                         "type": "array",
